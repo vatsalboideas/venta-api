@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  BOSS
+  EMPLOYEE
+  INTERN
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ForecastCategory {
+  PIPELINE
+  COMMIT
+  CLOSED
+}
+
+enum LogStatus {
+  COLD_LEAD
+  MEET_PRESENT
+  PROPOSAL_SENT
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  phone         String?
+  password      String
+  twoFAEnabled  Boolean   @default(false) @map("2fa_enabled")
+  position      String?
+  department    String?
+  role          Role
+  ownedBrands   Brand[]   @relation("BrandOwner")
+  contactsMade  Contact[] @relation("ContactCreator")
+  assignedLogs  Log[]     @relation("LogAssignee")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("users")
+}
+
+model Brand {
+  id               String           @id @default(uuid())
+  name             String
+  industry         String?
+  priority         Priority
+  forecastCategory ForecastCategory @default(PIPELINE) @map("forecast_category")
+  expectedRevenue  Decimal          @db.Decimal(14, 2) @map("expected_revenue")
+  website          String?
+  description      String?
+  ownerId          String           @map("owner_id")
+  owner            User             @relation("BrandOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  contacts         Contact[]
+  logs             Log[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([ownerId])
+  @@map("brands")
+}
+
+model Contact {
+  id         String   @id @default(uuid())
+  brandId    String   @map("brand_id")
+  brand      Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name       String
+  position   String?
+  email      String?
+  phone      String?
+  address    String?
+  createdBy  String   @map("created_by")
+  creator    User     @relation("ContactCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  logs       Log[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([brandId])
+  @@index([createdBy])
+  @@map("contacts")
+}
+
+model Log {
+  id              String    @id @default(uuid())
+  title           String
+  brandId         String    @map("brand_id")
+  brand           Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  contactId       String?   @map("contact_id")
+  contact         Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  status          LogStatus
+  priority        Priority
+  assignedTo      String    @map("assigned_to")
+  assignee        User      @relation("LogAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
+  lastContactDate DateTime? @map("last_contact_date")
+  followUpDate    DateTime? @map("follow_up_date")
+  meetingDate     DateTime? @map("meeting_date")
+  actualRevenue   Decimal?  @db.Decimal(14, 2) @map("actual_revenue")
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([brandId])
+  @@index([contactId])
+  @@index([assignedTo])
+  @@index([status])
+  @@map("logs")
+}
