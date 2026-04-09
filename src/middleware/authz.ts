@@ -45,3 +45,49 @@ export async function assertBrandWriteAccessOrThrow(user: AuthUser, brandId: str
     throw err;
   }
 }
+
+export async function assertContactWriteAccessOrThrow(user: AuthUser, contactId: string) {
+  if (user.role === Role.BOSS) return;
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: contactId },
+    select: { createdBy: true },
+  });
+
+  if (!contact) {
+    const err = new Error("Contact not found");
+    // @ts-expect-error custom status for controller handling
+    err.status = 404;
+    throw err;
+  }
+
+  if (contact.createdBy !== user.id) {
+    const err = new Error("Forbidden");
+    // @ts-expect-error custom status for controller handling
+    err.status = 403;
+    throw err;
+  }
+}
+
+export async function assertLogWriteAccessOrThrow(user: AuthUser, logId: string) {
+  if (user.role === Role.BOSS) return;
+
+  const log = await prisma.log.findUnique({
+    where: { id: logId },
+    select: { assignedTo: true },
+  });
+
+  if (!log) {
+    const err = new Error("Log not found");
+    // @ts-expect-error custom status for controller handling
+    err.status = 404;
+    throw err;
+  }
+
+  if (log.assignedTo !== user.id) {
+    const err = new Error("Forbidden");
+    // @ts-expect-error custom status for controller handling
+    err.status = 403;
+    throw err;
+  }
+}

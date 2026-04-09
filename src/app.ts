@@ -1,17 +1,45 @@
-import express from "express";
+import express, { NextFunction, Request, Response } from "express";
 import { Role } from "@prisma/client";
 import swaggerUi from "swagger-ui-express";
 
 import analyticsRoutes from "./routes/analytics.routes";
+import authRoutes from "./routes/auth.routes";
 import brandRoutes from "./routes/brand.routes";
+import contactRoutes from "./routes/contact.routes";
+import logRoutes from "./routes/log.routes";
+import { decryptEncryptedRequest, encryptEncryptedResponse } from "./middleware/encryption";
 import { openApiSpec } from "./swagger";
+import { verifyAccessToken } from "./utils/jwt";
 
 const app = express();
 app.use(express.json());
+app.use(decryptEncryptedRequest);
+app.use(encryptEncryptedResponse);
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    const userTag = req.user ? `${req.user.id} (${req.user.role})` : "anonymous";
+    console.log(
+      `[api] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${durationMs}ms) user=${userTag}`,
+    );
+  });
+  next();
+});
 
 // Replace with your JWT/session middleware.
-// For local testing, pass x-user-id and x-user-role headers.
+// Supports Authorization Bearer token. For local testing, x-user-id/x-user-role still work.
 app.use((req, _res, next) => {
+  const authHeader = req.header("authorization");
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+  if (token) {
+    const decoded = verifyAccessToken(token);
+    if (decoded) {
+      req.user = { id: decoded.userId, role: decoded.role };
+      return next();
+    }
+  }
+
   const userId = req.header("x-user-id");
   const userRole = req.header("x-user-role") as Role | undefined;
 
@@ -22,9 +50,25 @@ app.use((req, _res, next) => {
   next();
 });
 
+app.use("/auth", authRoutes);
 app.use("/brands", brandRoutes);
+app.use("/contacts", contactRoutes);
+app.use("/logs", logRoutes);
 app.use("/analytics/logs", analyticsRoutes);
 app.get("/docs.json", (_req, res) => res.json(openApiSpec));
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec));
+
+// 404 – unknown route
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ message: "Not found" });
+});
+
+// Global error handler – catches ValidationError, unhandled throws, etc.
+app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  const status = err.status ?? 500;
+  const message = status < 500 ? err.message : "Internal server error";
+  if (status >= 500) console.error("[error]", err);
+  res.status(status).json({ message });
+});
 
 export default app;

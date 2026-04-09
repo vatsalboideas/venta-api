@@ -41,22 +41,27 @@ model User {
   phone         String?
   password      String
   twoFAEnabled  Boolean   @default(false) @map("2fa_enabled")
+  twoFASecret   String?   @map("2fa_secret")
   position      String?
   department    String?
   role          Role
+  createdBy     String?   @map("created_by")
+  creator       User?     @relation("UserCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdUsers  User[]    @relation("UserCreator")
   ownedBrands   Brand[]   @relation("BrandOwner")
   contactsMade  Contact[] @relation("ContactCreator")
   assignedLogs  Log[]     @relation("LogAssignee")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  @@index([createdBy])
   @@map("users")
 }
 
 model Brand {
   id               String           @id @default(uuid())
   name             String
-  industry         String?
+  industry         String
   priority         Priority
   forecastCategory ForecastCategory @default(PIPELINE) @map("forecast_category")
   expectedRevenue  Decimal          @db.Decimal(14, 2) @map("expected_revenue")
@@ -75,12 +80,12 @@ model Brand {
 
 model Contact {
   id         String   @id @default(uuid())
-  brandId    String   @map("brand_id")
-  brand      Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  brandId    String?  @map("brand_id")
+  brand      Brand?   @relation(fields: [brandId], references: [id], onDelete: Cascade)
   name       String
-  position   String?
-  email      String?
-  phone      String?
+  position   String
+  email      String
+  phone      String
   address    String?
   createdBy  String   @map("created_by")
   creator    User     @relation("ContactCreator", fields: [createdBy], references: [id], onDelete: Restrict)
