@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSelector } from "react-redux";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -15,6 +15,7 @@ import {
   useCreateLogMutation,
   useDeleteLogMutation,
   useListBrandsQuery,
+  useListContactsQuery,
   useListLogsQuery,
   useUpdateLogMutation,
 } from "@/store/services/api";
@@ -120,6 +121,149 @@ function Select<T extends string>({
   );
 }
 
+type AutocompleteOption = {
+  id: string;
+  label: string;
+  secondary?: string;
+};
+
+function AutocompleteField({
+  id,
+  value,
+  options,
+  loading,
+  placeholder,
+  noResultsText,
+  isDarkTheme,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: AutocompleteOption[];
+  loading: boolean;
+  placeholder: string;
+  noResultsText: string;
+  isDarkTheme: boolean;
+  onChange: (id: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [visibleCount, setVisibleCount] = useState(20);
+  const debounceRef = useRef<number | null>(null);
+
+  const selected = options.find((o) => o.id === value);
+
+  const filteredOptions = useMemo(() => {
+    const term = debouncedSearch.trim().toLowerCase();
+    if (!term) return options;
+    return options.filter((o) => {
+      const label = o.label.toLowerCase();
+      const secondary = o.secondary?.toLowerCase() ?? "";
+      return label.includes(term) || secondary.includes(term);
+    });
+  }, [options, debouncedSearch]);
+
+  const visibleOptions = filteredOptions.slice(0, visibleCount);
+
+  function handleOpen() {
+    setIsOpen(true);
+    // Always reopen with a fresh query so users can quickly change selections.
+    setSearchInput("");
+    setDebouncedSearch("");
+    setVisibleCount(20);
+  }
+
+  function handleInputChange(next: string) {
+    setSearchInput(next);
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      setDebouncedSearch(next);
+      setVisibleCount(20);
+    }, 300);
+  }
+
+  function handleSelect(optionId: string) {
+    onChange(optionId);
+    setSearchInput("");
+    setDebouncedSearch("");
+    setIsOpen(false);
+  }
+
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        value={isOpen ? searchInput : (selected?.label ?? "")}
+        onFocus={handleOpen}
+        onClick={handleOpen}
+        onChange={(e) => handleInputChange(e.target.value)}
+        onBlur={() => setIsOpen(false)}
+        placeholder={placeholder}
+        className={
+          isDarkTheme
+            ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30"
+            : undefined
+        }
+      />
+      {isOpen ? (
+        <div
+          className={
+            isDarkTheme
+              ? "absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-white/10 bg-slate-900 shadow-xl"
+              : "absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-xl"
+          }
+        >
+          {loading ? (
+            <p className={isDarkTheme ? "px-3 py-2 text-sm text-slate-400" : "px-3 py-2 text-sm text-slate-500"}>
+              Loading options...
+            </p>
+          ) : visibleOptions.length > 0 ? (
+            visibleOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleSelect(option.id)}
+                className={
+                  isDarkTheme
+                    ? "flex w-full items-center justify-between px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
+                    : "flex w-full items-center justify-between px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                }
+              >
+                <span>{option.label}</span>
+                {option.secondary ? (
+                  <span className={isDarkTheme ? "text-xs text-slate-400" : "text-xs text-slate-500"}>
+                    {option.secondary}
+                  </span>
+                ) : null}
+              </button>
+            ))
+          ) : (
+            <p className={isDarkTheme ? "px-3 py-2 text-sm text-slate-400" : "px-3 py-2 text-sm text-slate-500"}>
+              {noResultsText}
+            </p>
+          )}
+          {!loading && visibleCount < filteredOptions.length ? (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setVisibleCount((prev) => prev + 20)}
+              className={
+                isDarkTheme
+                  ? "w-full border-t border-white/10 px-3 py-2 text-xs text-cyan-300 hover:bg-slate-800"
+                  : "w-full border-t border-slate-200 px-3 py-2 text-xs text-blue-600 hover:bg-slate-100"
+              }
+            >
+              Load more
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function LogsPage() {
   const token = useSelector((state: RootState) => state.auth.token);
   const initialized = useSelector((state: RootState) => state.auth.initialized);
@@ -132,16 +276,30 @@ export default function LogsPage() {
   const [logBrandId, setLogBrandId] = useState("");
   const [logStatus, setLogStatus] = useState<LogStatus | "">("");
   const [logPriority, setLogPriority] = useState<Priority | "">("");
+  const [logContactId, setLogContactId] = useState("");
+  const [logLastContactDate, setLogLastContactDate] = useState("");
+  const [logFollowUpDate, setLogFollowUpDate] = useState("");
+  const [logMeetingDate, setLogMeetingDate] = useState("");
+  const [logActualRevenue, setLogActualRevenue] = useState("");
+  const [logNotes, setLogNotes] = useState("");
   const [logErrors, setLogErrors] = useState<Record<string, string>>({});
+  const [showCreateLogModal, setShowCreateLogModal] = useState(false);
 
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [editLogTitle, setEditLogTitle] = useState("");
   const [editLogBrandId, setEditLogBrandId] = useState("");
   const [editLogStatus, setEditLogStatus] = useState<LogStatus | "">("");
   const [editLogPriority, setEditLogPriority] = useState<Priority | "">("");
+  const [editLogContactId, setEditLogContactId] = useState("");
+  const [editLogLastContactDate, setEditLogLastContactDate] = useState("");
+  const [editLogFollowUpDate, setEditLogFollowUpDate] = useState("");
+  const [editLogMeetingDate, setEditLogMeetingDate] = useState("");
+  const [editLogActualRevenue, setEditLogActualRevenue] = useState("");
+  const [editLogNotes, setEditLogNotes] = useState("");
   const [editLogErrors, setEditLogErrors] = useState<Record<string, string>>({});
 
   const brands = useListBrandsQuery(undefined, { skip: !token });
+  const contacts = useListContactsQuery(undefined, { skip: !token });
   const logs = useListLogsQuery(undefined, { skip: !token });
   const [createLog, createLogState] = useCreateLogMutation();
   const [deleteLog] = useDeleteLogMutation();
@@ -170,6 +328,14 @@ export default function LogsPage() {
     if (!logBrandId) errs.brandId = "Select a brand";
     if (!logStatus) errs.status = "Status is required";
     if (!logPriority) errs.priority = "Priority is required";
+    if (!logContactId) errs.contactId = "Contact is required";
+    const selectedBrandOwnerId = brands.data?.find((b) => b.id === logBrandId)?.ownerId ?? "";
+    if (!selectedBrandOwnerId) errs.assignedTo = "Assigned user is required";
+    if (!logLastContactDate) errs.lastContactDate = "Last contact date is required";
+    if (!logFollowUpDate) errs.followUpDate = "Follow up date is required";
+    if (!logMeetingDate) errs.meetingDate = "Meeting date is required";
+    if (logActualRevenue.trim() === "") errs.actualRevenue = "Actual revenue is required";
+    if (!logNotes.trim()) errs.notes = "Notes are required";
     setLogErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
@@ -177,15 +343,29 @@ export default function LogsPage() {
       await createLog({
         title: logTitle.trim(),
         brandId: logBrandId,
+        contactId: logContactId,
         status: logStatus as LogStatus,
         priority: logPriority as Priority,
+        assignedTo: selectedBrandOwnerId,
+        lastContactDate: logLastContactDate,
+        followUpDate: logFollowUpDate,
+        meetingDate: logMeetingDate,
+        actualRevenue: Number(logActualRevenue),
+        notes: logNotes.trim(),
       }).unwrap();
       setNotice({ type: "success", text: "Log created." });
       setLogTitle("");
       setLogBrandId("");
       setLogStatus("");
       setLogPriority("");
+      setLogContactId("");
+      setLogLastContactDate("");
+      setLogFollowUpDate("");
+      setLogMeetingDate("");
+      setLogActualRevenue("");
+      setLogNotes("");
       setLogErrors({});
+      setShowCreateLogModal(false);
     } catch (err) {
       setNotice({ type: "error", text: getErrorMessage(err) });
     }
@@ -209,12 +389,38 @@ export default function LogsPage() {
     setEditLogBrandId(log.brandId ?? "");
     setEditLogStatus(log.status ?? "");
     setEditLogPriority(log.priority ?? "");
+    setEditLogContactId(log.contactId ?? "");
+    setEditLogLastContactDate((log.lastContactDate ?? "").slice(0, 10));
+    setEditLogFollowUpDate((log.followUpDate ?? "").slice(0, 10));
+    setEditLogMeetingDate((log.meetingDate ?? "").slice(0, 10));
+    setEditLogActualRevenue(log.actualRevenue !== undefined ? String(log.actualRevenue) : "");
+    setEditLogNotes(log.notes ?? "");
     setEditLogErrors({});
   }
 
   function onCloseEditLog() {
     setEditingLogId(null);
     setEditLogErrors({});
+  }
+
+  function onOpenCreateLogModal() {
+    setLogTitle("");
+    setLogBrandId("");
+    setLogStatus("");
+    setLogPriority("");
+    setLogContactId("");
+    setLogLastContactDate("");
+    setLogFollowUpDate("");
+    setLogMeetingDate("");
+    setLogActualRevenue("");
+    setLogNotes("");
+    setLogErrors({});
+    setShowCreateLogModal(true);
+  }
+
+  function onCloseCreateLogModal() {
+    setShowCreateLogModal(false);
+    setLogErrors({});
   }
 
   async function onUpdateLog(e: FormEvent) {
@@ -225,6 +431,14 @@ export default function LogsPage() {
     if (!editLogBrandId) errs.brandId = "Select a brand";
     if (!editLogStatus) errs.status = "Status is required";
     if (!editLogPriority) errs.priority = "Priority is required";
+    if (!editLogContactId) errs.contactId = "Contact is required";
+    const selectedEditBrandOwnerId = brands.data?.find((b) => b.id === editLogBrandId)?.ownerId ?? "";
+    if (!selectedEditBrandOwnerId) errs.assignedTo = "Assigned user is required";
+    if (!editLogLastContactDate) errs.lastContactDate = "Last contact date is required";
+    if (!editLogFollowUpDate) errs.followUpDate = "Follow up date is required";
+    if (!editLogMeetingDate) errs.meetingDate = "Meeting date is required";
+    if (editLogActualRevenue.trim() === "") errs.actualRevenue = "Actual revenue is required";
+    if (!editLogNotes.trim()) errs.notes = "Notes are required";
     setEditLogErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
@@ -233,8 +447,15 @@ export default function LogsPage() {
         id: editingLogId,
         title: editLogTitle.trim(),
         brandId: editLogBrandId,
+        contactId: editLogContactId,
         status: editLogStatus as LogStatus,
         priority: editLogPriority as Priority,
+        assignedTo: selectedEditBrandOwnerId,
+        lastContactDate: editLogLastContactDate,
+        followUpDate: editLogFollowUpDate,
+        meetingDate: editLogMeetingDate,
+        actualRevenue: Number(editLogActualRevenue),
+        notes: editLogNotes.trim(),
       }).unwrap();
       setNotice({ type: "success", text: "Log updated." });
       onCloseEditLog();
@@ -265,6 +486,20 @@ export default function LogsPage() {
   }
 
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const selectedBrand = brands.data?.find((b) => b.id === logBrandId);
+  const selectedBrandContacts = contacts.data?.filter((c) => c.brandId === logBrandId) ?? [];
+  const selectedBrandAssigneeName = selectedBrand?.owner?.name ?? "";
+  const selectedBrandExpectedRevenue =
+    selectedBrand?.expectedRevenue !== undefined ? Number(selectedBrand.expectedRevenue) : NaN;
+
+  const selectedEditBrand = brands.data?.find((b) => b.id === editLogBrandId);
+  const selectedEditBrandContacts = contacts.data?.filter((c) => c.brandId === editLogBrandId) ?? [];
+  const selectedEditBrandAssigneeName = selectedEditBrand?.owner?.name ?? "";
+  const selectedEditBrandExpectedRevenue =
+    selectedEditBrand?.expectedRevenue !== undefined ? Number(selectedEditBrand.expectedRevenue) : NaN;
+  const brandOptions = (brands.data ?? []).map((b) => ({ id: b.id, label: b.name }));
+  const createContactOptions = selectedBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
+  const editContactOptions = selectedEditBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
 
   return (
     <AppShell isDarkTheme={isDarkTheme}>
@@ -295,44 +530,15 @@ export default function LogsPage() {
 
         <div className="mx-auto max-w-7xl space-y-6 p-6">
           {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-          <div className="grid gap-6 lg:grid-cols-3">
-            <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20 lg:col-span-1" : "lg:col-span-1"}>
-              <CardHeader><CardTitle>New Log</CardTitle></CardHeader>
-              <CardContent>
-                <form className="space-y-3" onSubmit={onCreateLog} noValidate>
-                  <div className="space-y-1">
-                    <Label htmlFor="logTitle">Title *</Label>
-                    <Input id="logTitle" value={logTitle} onChange={(e) => setLogTitle(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined} />
-                    <FieldError msg={logErrors.title} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="logBrand">Brand *</Label>
-                    <select id="logBrand" value={logBrandId} onChange={(e) => setLogBrandId(e.target.value)} className={isDarkTheme ? "ui-native-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-native-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}>
-                      <option value="">Select brand...</option>
-                      {brands.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                    </select>
-                    <FieldError msg={logErrors.brandId} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="logStatus">Status *</Label>
-                    <Select id="logStatus" value={logStatus} onChange={setLogStatus} options={LOG_STATUSES} placeholder="Select..." className={isDarkTheme ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
-                    <FieldError msg={logErrors.status} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="logPriority">Priority *</Label>
-                    <Select id="logPriority" value={logPriority} onChange={setLogPriority} options={PRIORITIES} placeholder="Select..." className={isDarkTheme ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
-                    <FieldError msg={logErrors.priority} />
-                  </div>
-                  <Button className={isDarkTheme ? "w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "w-full"} disabled={createLogState.isLoading}>
-                    {createLogState.isLoading ? "Saving..." : "Create Log"}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-
-            <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20 lg:col-span-2" : "lg:col-span-2"}>
+          <div className="grid gap-6">
+            <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20" : undefined}>
               <CardHeader><CardTitle>Logs</CardTitle></CardHeader>
               <CardContent>
+                <div className="mb-4 flex justify-end">
+                  <Button className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined} onClick={onOpenCreateLogModal}>
+                    Add Log
+                  </Button>
+                </div>
                 <Table>
                   <THead>
                     <TR><TH>Title</TH><TH>Status</TH><TH>Priority</TH><TH>Brand</TH><TH>Assignee</TH><TH></TH></TR>
@@ -363,6 +569,105 @@ export default function LogsPage() {
           </div>
         </div>
 
+        {showCreateLogModal ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div className={isDarkTheme ? "w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50" : "w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>Add Log</h3>
+                <button type="button" onClick={onCloseCreateLogModal} className={isDarkTheme ? "text-slate-300 hover:text-white" : "text-slate-500 hover:text-slate-900"}>Close</button>
+              </div>
+              <form className="space-y-3" onSubmit={onCreateLog} noValidate>
+                <div className="space-y-1">
+                  <Label htmlFor="logTitle">Title *</Label>
+                  <Input id="logTitle" value={logTitle} onChange={(e) => setLogTitle(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={logErrors.title} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logBrand">Brand *</Label>
+                  <AutocompleteField
+                    id="logBrand"
+                    value={logBrandId}
+                    options={brandOptions}
+                    loading={brands.isLoading}
+                    placeholder="Search and select brand..."
+                    noResultsText="No brands found."
+                    isDarkTheme={isDarkTheme}
+                    onChange={(id) => {
+                      setLogBrandId(id);
+                      setLogContactId("");
+                    }}
+                  />
+                  <FieldError msg={logErrors.brandId} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logStatus">Status *</Label>
+                  <Select id="logStatus" value={logStatus} onChange={setLogStatus} options={LOG_STATUSES} placeholder="Select..." className={isDarkTheme ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
+                  <FieldError msg={logErrors.status} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logPriority">Priority *</Label>
+                  <Select id="logPriority" value={logPriority} onChange={setLogPriority} options={PRIORITIES} placeholder="Select..." className={isDarkTheme ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
+                  <FieldError msg={logErrors.priority} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logContact">Contact *</Label>
+                  <AutocompleteField
+                    id="logContact"
+                    value={logContactId}
+                    options={createContactOptions}
+                    loading={contacts.isLoading}
+                    placeholder={logBrandId ? "Search and select contact..." : "Select brand first..."}
+                    noResultsText={logBrandId ? "No contacts found for this brand." : "Select brand first."}
+                    isDarkTheme={isDarkTheme}
+                    onChange={setLogContactId}
+                  />
+                  <FieldError msg={logErrors.contactId} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logAssignedTo">Assigned To *</Label>
+                  <Input id="logAssignedTo" value={selectedBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <FieldError msg={logErrors.assignedTo} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logLastContactDate">Last Contact Date *</Label>
+                  <Input id="logLastContactDate" type="date" value={logLastContactDate} onChange={(e) => setLogLastContactDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={logErrors.lastContactDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logFollowUpDate">Follow Up Date *</Label>
+                  <Input id="logFollowUpDate" type="date" value={logFollowUpDate} onChange={(e) => setLogFollowUpDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={logErrors.followUpDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logMeetingDate">Meeting Date *</Label>
+                  <Input id="logMeetingDate" type="date" value={logMeetingDate} onChange={(e) => setLogMeetingDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={logErrors.meetingDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logExpectedRevenue">Expected Revenue (View Only) *</Label>
+                  <Input id="logExpectedRevenue" value={Number.isFinite(selectedBrandExpectedRevenue) ? selectedBrandExpectedRevenue.toFixed(2) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logActualRevenue">Actual Revenue *</Label>
+                  <Input id="logActualRevenue" type="number" min="0" step="0.01" value={logActualRevenue} onChange={(e) => setLogActualRevenue(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={logErrors.actualRevenue} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="logNotes">Notes *</Label>
+                  <textarea id="logNotes" value={logNotes} onChange={(e) => setLogNotes(e.target.value)} rows={3} className={isDarkTheme ? "w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
+                  <FieldError msg={logErrors.notes} />
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button type="button" variant="outline" className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined} onClick={onCloseCreateLogModal}>Cancel</Button>
+                  <Button className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined} disabled={createLogState.isLoading}>
+                    {createLogState.isLoading ? "Saving..." : "Create Log"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        ) : null}
+
         {editingLogId ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
             <div className={isDarkTheme ? "w-full max-w-xl rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50" : "w-full max-w-xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"}>
@@ -378,10 +683,19 @@ export default function LogsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogBrand">Brand *</Label>
-                  <select id="editLogBrand" value={editLogBrandId} onChange={(e) => setEditLogBrandId(e.target.value)} className={isDarkTheme ? "ui-native-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-native-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}>
-                    <option value="">Select brand...</option>
-                    {brands.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
+                  <AutocompleteField
+                    id="editLogBrand"
+                    value={editLogBrandId}
+                    options={brandOptions}
+                    loading={brands.isLoading}
+                    placeholder="Search and select brand..."
+                    noResultsText="No brands found."
+                    isDarkTheme={isDarkTheme}
+                    onChange={(id) => {
+                      setEditLogBrandId(id);
+                      setEditLogContactId("");
+                    }}
+                  />
                   <FieldError msg={editLogErrors.brandId} />
                 </div>
                 <div className="space-y-1">
@@ -393,6 +707,54 @@ export default function LogsPage() {
                   <Label htmlFor="editLogPriority">Priority *</Label>
                   <Select id="editLogPriority" value={editLogPriority} onChange={setEditLogPriority} options={PRIORITIES} className={isDarkTheme ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
                   <FieldError msg={editLogErrors.priority} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogContact">Contact *</Label>
+                  <AutocompleteField
+                    id="editLogContact"
+                    value={editLogContactId}
+                    options={editContactOptions}
+                    loading={contacts.isLoading}
+                    placeholder={editLogBrandId ? "Search and select contact..." : "Select brand first..."}
+                    noResultsText={editLogBrandId ? "No contacts found for this brand." : "Select brand first."}
+                    isDarkTheme={isDarkTheme}
+                    onChange={setEditLogContactId}
+                  />
+                  <FieldError msg={editLogErrors.contactId} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogAssignedTo">Assigned To *</Label>
+                  <Input id="editLogAssignedTo" value={selectedEditBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <FieldError msg={editLogErrors.assignedTo} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogLastContactDate">Last Contact Date *</Label>
+                  <Input id="editLogLastContactDate" type="date" value={editLogLastContactDate} onChange={(e) => setEditLogLastContactDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={editLogErrors.lastContactDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogFollowUpDate">Follow Up Date *</Label>
+                  <Input id="editLogFollowUpDate" type="date" value={editLogFollowUpDate} onChange={(e) => setEditLogFollowUpDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={editLogErrors.followUpDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogMeetingDate">Meeting Date *</Label>
+                  <Input id="editLogMeetingDate" type="date" value={editLogMeetingDate} onChange={(e) => setEditLogMeetingDate(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={editLogErrors.meetingDate} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogExpectedRevenue">Expected Revenue (View Only) *</Label>
+                  <Input id="editLogExpectedRevenue" value={Number.isFinite(selectedEditBrandExpectedRevenue) ? selectedEditBrandExpectedRevenue.toFixed(2) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogActualRevenue">Actual Revenue *</Label>
+                  <Input id="editLogActualRevenue" type="number" min="0" step="0.01" value={editLogActualRevenue} onChange={(e) => setEditLogActualRevenue(e.target.value)} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <FieldError msg={editLogErrors.actualRevenue} />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="editLogNotes">Notes *</Label>
+                  <textarea id="editLogNotes" value={editLogNotes} onChange={(e) => setEditLogNotes(e.target.value)} rows={3} className={isDarkTheme ? "w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"} />
+                  <FieldError msg={editLogErrors.notes} />
                 </div>
                 <div className="mt-4 flex justify-end gap-2">
                   <Button type="button" variant="outline" className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined} onClick={onCloseEditLog}>Cancel</Button>

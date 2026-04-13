@@ -1,12 +1,11 @@
-import { LogStatus, Priority, Role } from "@prisma/client";
+import { LogStatus, Priority } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { Request, Response, NextFunction } from "express";
 
 import { assertLogWriteAccessOrThrow } from "../middleware/authz";
 import { prisma, syncBrandForecastOnClosedWon } from "../prisma";
 import {
-  optionalEnum,
-  parseOptionalDate,
+  requireDate,
   requireEnum,
   requireNonNegativeNumber,
   requireString,
@@ -56,46 +55,39 @@ export async function getLog(req: Request<LogIdParams>, res: Response, next: Nex
 
 export async function createLog(req: Request, res: Response, next: NextFunction) {
   try {
-    const user = req.user!;
     const title = requireString("title", req.body.title);
     const brandId = requireString("brandId", req.body.brandId);
+    const contactId = requireString("contactId", req.body.contactId);
     const status = requireEnum("status", req.body.status, LOG_STATUSES);
     const priority = requireEnum("priority", req.body.priority, PRIORITIES);
+    const assignedTo = requireString("assignedTo", req.body.assignedTo);
+    const notes = requireString("notes", req.body.notes);
+    const lastContactDate = requireDate("lastContactDate", req.body.lastContactDate);
+    const followUpDate = requireDate("followUpDate", req.body.followUpDate);
+    const meetingDate = requireDate("meetingDate", req.body.meetingDate);
+    const actualRevenue = requireNonNegativeNumber("actualRevenue", req.body.actualRevenue);
 
     // Verify brand exists
-    const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true } });
+    const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true, ownerId: true } });
     if (!brand) return res.status(404).json({ message: "Brand not found" });
 
-    const { contactId, assignedTo: rawAssignedTo, notes } = req.body as Record<string, unknown>;
+    // Contact must belong to selected brand.
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, brandId },
+      select: { id: true },
+    });
+    if (!contact) return res.status(404).json({ message: "Contact not found for selected brand" });
 
-    // Verify optional contact
-    if (contactId) {
-      const contact = await prisma.contact.findUnique({ where: { id: contactId as string }, select: { id: true } });
-      if (!contact) return res.status(404).json({ message: "Contact not found" });
+    // Assignee must match selected brand owner.
+    if (assignedTo !== brand.ownerId) {
+      return res.status(400).json({ message: "assignedTo must be the selected brand owner" });
     }
-
-    // Determine assignee
-    let assignedTo = user.id;
-    if (user.role === Role.BOSS && rawAssignedTo) {
-      const assignee = await prisma.user.findUnique({ where: { id: rawAssignedTo as string }, select: { id: true } });
-      if (!assignee) return res.status(404).json({ message: "Assigned user not found" });
-      assignedTo = rawAssignedTo as string;
-    }
-
-    // Validate optional fields
-    const lastContactDate = parseOptionalDate("lastContactDate", req.body.lastContactDate);
-    const followUpDate = parseOptionalDate("followUpDate", req.body.followUpDate);
-    const meetingDate = parseOptionalDate("meetingDate", req.body.meetingDate);
-    const actualRevenue =
-      req.body.actualRevenue !== undefined && req.body.actualRevenue !== null
-        ? requireNonNegativeNumber("actualRevenue", req.body.actualRevenue)
-        : null;
 
     const created = await prisma.log.create({
       data: {
         title,
         brandId,
-        contactId: (contactId as string | undefined) ?? null,
+        contactId,
         status,
         priority,
         assignedTo,
@@ -103,7 +95,7 @@ export async function createLog(req: Request, res: Response, next: NextFunction)
         followUpDate,
         meetingDate,
         actualRevenue,
-        notes: (notes as string | undefined) ?? null,
+        notes,
       },
       include: {
         brand: { select: { id: true, name: true, expectedRevenue: true } },
@@ -121,67 +113,47 @@ export async function createLog(req: Request, res: Response, next: NextFunction)
 
 export async function updateLog(req: Request<LogIdParams>, res: Response, next: NextFunction) {
   try {
-    const user = req.user!;
-    await assertLogWriteAccessOrThrow(user, req.params.id);
+    await assertLogWriteAccessOrThrow(req.user!, req.params.id);
 
-    const status = optionalEnum("status", req.body.status, LOG_STATUSES);
-    const priority = optionalEnum("priority", req.body.priority, PRIORITIES);
+    const title = requireString("title", req.body.title);
+    const brandId = requireString("brandId", req.body.brandId);
+    const contactId = requireString("contactId", req.body.contactId);
+    const status = requireEnum("status", req.body.status, LOG_STATUSES);
+    const priority = requireEnum("priority", req.body.priority, PRIORITIES);
+    const assignedTo = requireString("assignedTo", req.body.assignedTo);
+    const notes = requireString("notes", req.body.notes);
+    const lastContactDate = requireDate("lastContactDate", req.body.lastContactDate);
+    const followUpDate = requireDate("followUpDate", req.body.followUpDate);
+    const meetingDate = requireDate("meetingDate", req.body.meetingDate);
+    const actualRevenue = requireNonNegativeNumber("actualRevenue", req.body.actualRevenue);
 
-    const {
-      title,
-      brandId,
-      contactId,
-      assignedTo: rawAssignedTo,
-      notes,
-    } = req.body as Record<string, unknown>;
+    const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true, ownerId: true } });
+    if (!brand) return res.status(404).json({ message: "Brand not found" });
 
-    // Verify new brandId if being changed
-    if (brandId !== undefined) {
-      const brand = await prisma.brand.findUnique({ where: { id: brandId as string }, select: { id: true } });
-      if (!brand) return res.status(404).json({ message: "Brand not found" });
-    }
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, brandId },
+      select: { id: true },
+    });
+    if (!contact) return res.status(404).json({ message: "Contact not found for selected brand" });
 
-    // Verify new contactId if being changed
-    if (contactId !== undefined && contactId !== null) {
-      const contact = await prisma.contact.findUnique({ where: { id: contactId as string }, select: { id: true } });
-      if (!contact) return res.status(404).json({ message: "Contact not found" });
-    }
-
-    // Validate optional fields
-    const lastContactDate =
-      "lastContactDate" in req.body ? parseOptionalDate("lastContactDate", req.body.lastContactDate) : undefined;
-    const followUpDate =
-      "followUpDate" in req.body ? parseOptionalDate("followUpDate", req.body.followUpDate) : undefined;
-    const meetingDate =
-      "meetingDate" in req.body ? parseOptionalDate("meetingDate", req.body.meetingDate) : undefined;
-    const actualRevenue =
-      "actualRevenue" in req.body
-        ? req.body.actualRevenue !== null
-          ? requireNonNegativeNumber("actualRevenue", req.body.actualRevenue)
-          : null
-        : undefined;
-
-    let resolvedAssignedTo: string | undefined;
-    if (user.role === Role.BOSS && rawAssignedTo !== undefined) {
-      const assignee = await prisma.user.findUnique({ where: { id: rawAssignedTo as string }, select: { id: true } });
-      if (!assignee) return res.status(404).json({ message: "Assigned user not found" });
-      resolvedAssignedTo = rawAssignedTo as string;
+    if (assignedTo !== brand.ownerId) {
+      return res.status(400).json({ message: "assignedTo must be the selected brand owner" });
     }
 
     const updated = await prisma.log.update({
       where: { id: req.params.id },
       data: {
-        title: title as string | undefined,
-        brandId: brandId as string | undefined,
-        contactId: contactId === undefined ? undefined : ((contactId as string | null) ?? null),
+        title,
+        brandId,
+        contactId,
         status,
         priority,
-        assignedTo: resolvedAssignedTo,
+        assignedTo,
         lastContactDate,
         followUpDate,
         meetingDate,
         actualRevenue,
-        notes: notes === undefined ? undefined : ((notes as string) ?? null),
+        notes,
       },
       include: {
         brand: { select: { id: true, name: true, expectedRevenue: true } },

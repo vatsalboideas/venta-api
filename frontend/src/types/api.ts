@@ -153,18 +153,18 @@ export type LogItem = {
   id: string;
   title: string;
   brandId: string;
-  contactId?: string | null;
+  contactId: string;
   status: LogStatus;
   priority: Priority;
   assignedTo: string;
-  lastContactDate?: string | null;
-  followUpDate?: string | null;
-  meetingDate?: string | null;
-  actualRevenue?: number | null;
+  lastContactDate: string;
+  followUpDate: string;
+  meetingDate: string;
+  actualRevenue: number;
   expectedRevenue?: number;
-  notes?: string | null;
+  notes: string;
   brand?: Pick<Brand, "id" | "name" | "expectedRevenue">;
-  contact?: Pick<Contact, "id" | "name"> | null;
+  contact?: Pick<Contact, "id" | "name">;
   assignee?: Pick<User, "id" | "name" | "email" | "role">;
   createdAt?: string;
   updatedAt?: string;
@@ -173,15 +173,15 @@ export type LogItem = {
 export type CreateLogRequest = {
   title: string;
   brandId: string;
+  contactId: string;
   status: LogStatus;
   priority: Priority;
-  contactId?: string;
-  assignedTo?: string;
-  lastContactDate?: string;
-  followUpDate?: string;
-  meetingDate?: string;
-  actualRevenue?: number;
-  notes?: string;
+  assignedTo: string;
+  lastContactDate: string;
+  followUpDate: string;
+  meetingDate: string;
+  actualRevenue: number;
+  notes: string;
 };
 
 export type UpdateLogRequest = Partial<CreateLogRequest>;

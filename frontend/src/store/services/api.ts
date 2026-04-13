@@ -3,6 +3,7 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 import { decryptPayload, encryptPayload } from "@/lib/encryption";
+import { setToken } from "@/store/slices/auth-slice";
 import type {
   Brand,
   ConversionRateResponse,
@@ -29,6 +30,25 @@ import type {
 } from "@/types/api";
 
 const clientSecret = process.env.NEXT_PUBLIC_CLIENT_ENCRYPTION_SECRET ?? "frontend-dev-secret";
+const TOKEN_KEY = "venta-token";
+
+function shouldAutoLogout(url: string | undefined): boolean {
+  if (!url) return true;
+  return !(
+    url.includes("/auth/login") ||
+    url.includes("/auth/register") ||
+    url.includes("/auth/2fa/verify-login")
+  );
+}
+
+function logoutAndRedirect(apiStore: { dispatch: (action: unknown) => void }) {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_KEY);
+  apiStore.dispatch(setToken(null));
+  if (window.location.pathname !== "/") {
+    window.location.replace("/");
+  }
+}
 
 const rawBaseQuery = fetchBaseQuery({
   baseUrl: "/api/proxy",
@@ -44,11 +64,18 @@ export const api = createApi({
   reducerPath: "api",
   baseQuery: async (args, apiStore, extraOptions) => {
     const request = typeof args === "string" ? { url: args } : { ...args };
+    const currentToken = (apiStore.getState() as { auth: { token: string | null } }).auth.token;
     if (request.body !== undefined) {
       request.body = await encryptPayload(request.body, clientSecret);
     }
     const result = await rawBaseQuery(request, apiStore, extraOptions);
-    if (result.error) return result;
+    if (result.error) {
+      const status = result.error.status;
+      if ((status === 401 || status === 403) && currentToken && shouldAutoLogout(request.url)) {
+        logoutAndRedirect(apiStore);
+      }
+      return result;
+    }
     const encrypted = result.data as { payload?: string };
     if (encrypted?.payload) {
       result.data = await decryptPayload(encrypted.payload, clientSecret);

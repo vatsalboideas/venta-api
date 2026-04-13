@@ -53,6 +53,18 @@ export function parseOptionalDate(field: string, value: unknown): Date | null {
   return d;
 }
 
+/** Throws ValidationError if value is absent or malformed date string. */
+export function requireDate(field: string, value: unknown): Date {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    throw new ValidationError(`${field} is required`);
+  }
+  const d = new Date(value as string);
+  if (isNaN(d.getTime())) {
+    throw new ValidationError(`${field} must be a valid date string`);
+  }
+  return d;
+}
+
 /** Simple RFC-5322-compatible email test. */
 export function requireEmail(field: string, value: unknown): string {
   const str = requireString(field, value);

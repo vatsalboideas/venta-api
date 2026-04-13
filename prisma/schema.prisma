@@ -103,17 +103,17 @@ model Log {
   title           String
   brandId         String    @map("brand_id")
   brand           Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  contactId       String?   @map("contact_id")
-  contact         Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId       String    @map("contact_id")
+  contact         Contact   @relation(fields: [contactId], references: [id], onDelete: Restrict)
   status          LogStatus
   priority        Priority
   assignedTo      String    @map("assigned_to")
   assignee        User      @relation("LogAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
-  lastContactDate DateTime? @map("last_contact_date")
-  followUpDate    DateTime? @map("follow_up_date")
-  meetingDate     DateTime? @map("meeting_date")
-  actualRevenue   Decimal?  @db.Decimal(14, 2) @map("actual_revenue")
-  notes           String?
+  lastContactDate DateTime  @map("last_contact_date")
+  followUpDate    DateTime  @map("follow_up_date")
+  meetingDate     DateTime  @map("meeting_date")
+  actualRevenue   Decimal   @db.Decimal(14, 2) @map("actual_revenue")
+  notes           String
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
