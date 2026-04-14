@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 
 import { Button } from "@/components/ui/button";
@@ -66,26 +67,26 @@ export default function SettingsPage() {
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [setupOtp, setSetupOtp] = useState("");
-  const [disableOtp, setDisableOtp] = useState("");
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState("");
   const [otpauthUrl, setOtpauthUrl] = useState("");
-  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">("system");
-  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
+  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
+    if (typeof window === "undefined") return "system";
+    const stored = window.localStorage.getItem("venta-dashboard-theme");
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
 
   const me = useMeQuery(undefined, { skip: !token });
   const [setup2FA, setup2FAState] = useSetup2FAMutation();
   const [verifySetup2FA, verifySetup2FAState] = useVerifySetup2FAMutation();
   const [disable2FA, disable2FAState] = useDisable2FAMutation();
+  const setupOtpForm = useForm<{ token: string }>({ defaultValues: { token: "" } });
+  const disableOtpForm = useForm<{ token: string }>({ defaultValues: { token: "" } });
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("venta-dashboard-theme");
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      setThemeMode(stored);
-    }
-
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    setSystemPrefersDark(media.matches);
     const onSystemThemeChange = (event: MediaQueryListEvent) => {
       setSystemPrefersDark(event.matches);
     };
@@ -104,7 +105,7 @@ export default function SettingsPage() {
       const response = await setup2FA().unwrap();
       setQrCodeDataUrl(response.qrCodeDataUrl);
       setOtpauthUrl(response.otpauthUrl);
-      setSetupOtp("");
+      setupOtpForm.reset({ token: "" });
       setNotice({ type: "success", text: "2FA setup started. Scan the QR and verify code." });
       await me.refetch();
     } catch (err) {
@@ -112,34 +113,32 @@ export default function SettingsPage() {
     }
   }
 
-  async function onVerify2FASetup(e: FormEvent) {
-    e.preventDefault();
-    if (!setupOtp.trim()) {
+  async function onVerify2FASetup(values: { token: string }) {
+    if (!values.token.trim()) {
       setNotice({ type: "error", text: "Please enter the authenticator code." });
       return;
     }
     try {
-      const result = await verifySetup2FA({ token: setupOtp.trim() }).unwrap();
+      const result = await verifySetup2FA({ token: values.token.trim() }).unwrap();
       setNotice({ type: "success", text: result.message || "2FA enabled successfully." });
       setQrCodeDataUrl("");
       setOtpauthUrl("");
-      setSetupOtp("");
+      setupOtpForm.reset({ token: "" });
       await me.refetch();
     } catch (err) {
       setNotice({ type: "error", text: getErrorMessage(err) });
     }
   }
 
-  async function onDisable2FA(e: FormEvent) {
-    e.preventDefault();
-    if (!disableOtp.trim()) {
+  async function onDisable2FA(values: { token: string }) {
+    if (!values.token.trim()) {
       setNotice({ type: "error", text: "Please enter your authenticator code." });
       return;
     }
     try {
-      const result = await disable2FA({ token: disableOtp.trim() }).unwrap();
+      const result = await disable2FA({ token: values.token.trim() }).unwrap();
       setNotice({ type: "success", text: result.message || "2FA disabled successfully." });
-      setDisableOtp("");
+      disableOtpForm.reset({ token: "" });
       await me.refetch();
     } catch (err) {
       setNotice({ type: "error", text: getErrorMessage(err) });
@@ -307,14 +306,13 @@ export default function SettingsPage() {
                   <p className={isDarkTheme ? "text-sm font-medium text-white" : "text-sm font-medium text-slate-900"}>Enable Google Authenticator</p>
                   <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center">
                     <img src={qrCodeDataUrl} alt="QR code for 2FA setup" className={isDarkTheme ? "h-40 w-40 rounded border border-slate-700 bg-white p-2" : "h-40 w-40 rounded border border-slate-300 bg-white p-2"} />
-                    <form className="w-full max-w-sm space-y-2" onSubmit={onVerify2FASetup}>
+                    <form className="w-full max-w-sm space-y-2" onSubmit={setupOtpForm.handleSubmit(onVerify2FASetup)}>
                       <Label htmlFor="setupOtp">Authenticator code</Label>
                       <Input
                         id="setupOtp"
                         inputMode="numeric"
                         placeholder="6-digit code"
-                        value={setupOtp}
-                        onChange={(e) => setSetupOtp(e.target.value)}
+                        {...setupOtpForm.register("token")}
                         className={isDarkTheme ? "border-white/15 bg-slate-900 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                       />
                       <Button className={isDarkTheme ? "w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "w-full"} disabled={verifySetup2FAState.isLoading}>
@@ -331,14 +329,13 @@ export default function SettingsPage() {
               ) : null}
 
               {me.data?.twoFAEnabled ? (
-                <form className={isDarkTheme ? "max-w-sm space-y-2 rounded-md border border-white/10 bg-slate-800/70 p-4" : "max-w-sm space-y-2 rounded-md border border-slate-200 bg-slate-50 p-4"} onSubmit={onDisable2FA}>
+                <form className={isDarkTheme ? "max-w-sm space-y-2 rounded-md border border-white/10 bg-slate-800/70 p-4" : "max-w-sm space-y-2 rounded-md border border-slate-200 bg-slate-50 p-4"} onSubmit={disableOtpForm.handleSubmit(onDisable2FA)}>
                   <Label htmlFor="disableOtp">Disable 2FA (enter current code)</Label>
                   <Input
                     id="disableOtp"
                     inputMode="numeric"
                     placeholder="6-digit code"
-                    value={disableOtp}
-                    onChange={(e) => setDisableOtp(e.target.value)}
+                    {...disableOtpForm.register("token")}
                     className={isDarkTheme ? "border-white/15 bg-slate-900 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
                   <Button

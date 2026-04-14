@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -69,13 +70,14 @@ export default function EmployeesPage() {
   const [createdByMeOnly, setCreatedByMeOnly] = useState(false);
   const [showCreateInternModal, setShowCreateInternModal] = useState(false);
 
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [phone, setPhone] = useState("");
-  const [department, setDepartment] = useState("");
-  const [position, setPosition] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const createInternForm = useForm<{
+    name: string;
+    email: string;
+    password: string;
+    phone: string;
+    department: string;
+    position: string;
+  }>({ defaultValues: { name: "", email: "", password: "", phone: "", department: "", position: "" } });
 
   const me = useMeQuery(undefined, { skip: !token });
   const users = useListUsersQuery({ createdByMe: createdByMeOnly }, { skip: !token });
@@ -93,34 +95,25 @@ export default function EmployeesPage() {
     window.localStorage.setItem("venta-dashboard-theme", value);
   }
 
-  async function onCreateIntern(e: FormEvent) {
-    e.preventDefault();
-    const nextErrors: Record<string, string> = {};
-    if (!name.trim()) nextErrors.name = "Name is required";
-    if (!email.trim()) nextErrors.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) nextErrors.email = "Enter a valid email";
-    if (!password.trim()) nextErrors.password = "Password is required";
-    else if (password.trim().length < 8) nextErrors.password = "Password must be at least 8 characters";
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
+  async function onCreateIntern(values: {
+    name: string;
+    email: string;
+    password: string;
+    phone: string;
+    department: string;
+    position: string;
+  }) {
     try {
       await createIntern({
-        name: name.trim(),
-        email: email.trim(),
-        password: password.trim(),
-        phone: phone.trim() || undefined,
-        department: department.trim() || undefined,
-        position: position.trim() || undefined,
+        name: values.name.trim(),
+        email: values.email.trim(),
+        password: values.password.trim(),
+        phone: values.phone.trim() || undefined,
+        department: values.department.trim() || undefined,
+        position: values.position.trim() || undefined,
       }).unwrap();
       setNotice({ type: "success", text: "Intern created successfully." });
-      setName("");
-      setEmail("");
-      setPassword("");
-      setPhone("");
-      setDepartment("");
-      setPosition("");
-      setErrors({});
+      createInternForm.reset();
       setShowCreateInternModal(false);
     } catch (err) {
       setNotice({ type: "error", text: getErrorMessage(err) });
@@ -128,19 +121,13 @@ export default function EmployeesPage() {
   }
 
   function onOpenCreateInternModal() {
-    setName("");
-    setEmail("");
-    setPassword("");
-    setPhone("");
-    setDepartment("");
-    setPosition("");
-    setErrors({});
+    createInternForm.reset();
     setShowCreateInternModal(true);
   }
 
   function onCloseCreateInternModal() {
     setShowCreateInternModal(false);
-    setErrors({});
+    createInternForm.reset();
   }
 
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
@@ -313,17 +300,16 @@ export default function EmployeesPage() {
                 </button>
               </div>
 
-              <form className="space-y-3" onSubmit={onCreateIntern} noValidate>
+              <form className="space-y-3" onSubmit={createInternForm.handleSubmit(onCreateIntern)} noValidate>
                 <div className="space-y-1">
                   <Label htmlFor="internName">Name *</Label>
                   <Input
                     id="internName"
                     placeholder="Intern name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    {...createInternForm.register("name", { required: "Name is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={errors.name} />
+                  <FieldError msg={createInternForm.formState.errors.name?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="internEmail">Email *</Label>
@@ -331,11 +317,13 @@ export default function EmployeesPage() {
                     id="internEmail"
                     type="email"
                     placeholder="intern@company.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    {...createInternForm.register("email", {
+                      required: "Email is required",
+                      pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Enter a valid email" },
+                    })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={errors.email} />
+                  <FieldError msg={createInternForm.formState.errors.email?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="internPassword">Password *</Label>
@@ -343,19 +331,20 @@ export default function EmployeesPage() {
                     id="internPassword"
                     type="password"
                     placeholder="At least 8 characters"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    {...createInternForm.register("password", {
+                      required: "Password is required",
+                      minLength: { value: 8, message: "Password must be at least 8 characters" },
+                    })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={errors.password} />
+                  <FieldError msg={createInternForm.formState.errors.password?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="internPhone">Phone</Label>
                   <Input
                     id="internPhone"
                     placeholder="+91 98765 43210"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    {...createInternForm.register("phone")}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
                 </div>
@@ -364,8 +353,7 @@ export default function EmployeesPage() {
                   <Input
                     id="internDepartment"
                     placeholder="Sales"
-                    value={department}
-                    onChange={(e) => setDepartment(e.target.value)}
+                    {...createInternForm.register("department")}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
                 </div>
@@ -374,8 +362,7 @@ export default function EmployeesPage() {
                   <Input
                     id="internPosition"
                     placeholder="Sales Intern"
-                    value={position}
-                    onChange={(e) => setPosition(e.target.value)}
+                    {...createInternForm.register("position")}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
                 </div>

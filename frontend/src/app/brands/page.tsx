@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -121,21 +122,17 @@ export default function BrandsPage() {
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">("system");
-  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
+  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
+    if (typeof window === "undefined") return "system";
+    const stored = window.localStorage.getItem("venta-dashboard-theme");
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
 
-  const [brandName, setBrandName] = useState("");
-  const [brandPriority, setBrandPriority] = useState<Priority | "">("");
-  const [brandRevenue, setBrandRevenue] = useState("");
-  const [brandIndustry, setBrandIndustry] = useState("");
-  const [brandForecast, setBrandForecast] = useState<ForecastCategory | "">("");
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
-  const [newContactName, setNewContactName] = useState("");
-  const [newContactPosition, setNewContactPosition] = useState("");
-  const [newContactEmail, setNewContactEmail] = useState("");
-  const [newContactPhone, setNewContactPhone] = useState("");
   const [useExistingContacts, setUseExistingContacts] = useState(true);
-  const [brandErrors, setBrandErrors] = useState<Record<string, string>>({});
   const [showCreateBrandModal, setShowCreateBrandModal] = useState(false);
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
   const [initialEditState, setInitialEditState] = useState<{
@@ -156,6 +153,29 @@ export default function BrandsPage() {
   const [contactsVisibleCount, setContactsVisibleCount] = useState(20);
   const [isContactDropdownOpen, setIsContactDropdownOpen] = useState(false);
   const contactDropdownRef = useRef<HTMLDivElement | null>(null);
+  const brandForm = useForm<{
+    brandName: string;
+    brandPriority: Priority | "";
+    brandRevenue: string;
+    brandIndustry: string;
+    brandForecast: ForecastCategory | "";
+    newContactName: string;
+    newContactPosition: string;
+    newContactEmail: string;
+    newContactPhone: string;
+  }>({
+    defaultValues: {
+      brandName: "",
+      brandPriority: "",
+      brandRevenue: "",
+      brandIndustry: "",
+      brandForecast: "",
+      newContactName: "",
+      newContactPosition: "",
+      newContactEmail: "",
+      newContactPhone: "",
+    },
+  });
 
   const brands = useListBrandsQuery(undefined, { skip: !token });
   const contacts = useListContactsQuery(undefined, { skip: !token });
@@ -190,40 +210,20 @@ export default function BrandsPage() {
     const currentIds = [...selectedContactIds].sort();
     const initialIds = [...initialEditState.selectedContactIds].sort();
     return (
-      brandName.trim() === initialEditState.name &&
-      brandPriority === initialEditState.priority &&
-      brandRevenue.trim() === initialEditState.revenue &&
-      brandIndustry.trim() === initialEditState.industry &&
-      (brandForecast || "") === (initialEditState.forecast || "") &&
+      !brandForm.formState.isDirty &&
       useExistingContacts === initialEditState.useExistingContacts &&
-      JSON.stringify(currentIds) === JSON.stringify(initialIds) &&
-      newContactName.trim() === initialEditState.newContactName &&
-      newContactPosition.trim() === initialEditState.newContactPosition &&
-      newContactEmail.trim() === initialEditState.newContactEmail &&
-      newContactPhone.trim() === initialEditState.newContactPhone
+      JSON.stringify(currentIds) === JSON.stringify(initialIds)
     );
   }, [
     editingBrandId,
     initialEditState,
-    brandName,
-    brandPriority,
-    brandRevenue,
-    brandIndustry,
-    brandForecast,
+    brandForm.formState.isDirty,
     useExistingContacts,
     selectedContactIds,
-    newContactName,
-    newContactPosition,
-    newContactEmail,
-    newContactPhone,
   ]);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("venta-dashboard-theme");
-    if (stored === "light" || stored === "dark" || stored === "system") setThemeMode(stored);
-
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    setSystemPrefersDark(media.matches);
     const onSystemThemeChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches);
     media.addEventListener("change", onSystemThemeChange);
     return () => media.removeEventListener("change", onSystemThemeChange);
@@ -235,10 +235,6 @@ export default function BrandsPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [contactSearchInput]);
-
-  useEffect(() => {
-    setContactsVisibleCount(20);
-  }, [debouncedContactSearch, showCreateBrandModal]);
 
   useEffect(() => {
     if (!isContactDropdownOpen) return;
@@ -272,47 +268,44 @@ export default function BrandsPage() {
     window.localStorage.setItem("venta-dashboard-theme", value);
   }
 
-  async function onSubmitBrandForm(e: FormEvent) {
-    e.preventDefault();
-    const errs: Record<string, string> = {};
-    if (!brandName.trim()) errs.brandName = "Name is required";
-    if (!brandPriority) errs.brandPriority = "Priority is required";
-    if (!brandIndustry.trim()) errs.brandIndustry = "Industry is required";
-    if (!brandRevenue || isNaN(Number(brandRevenue)) || Number(brandRevenue) < 0) {
-      errs.brandRevenue = "Enter a valid non-negative number";
-    }
+  async function onSubmitBrandForm(values: {
+    brandName: string;
+    brandPriority: Priority | "";
+    brandRevenue: string;
+    brandIndustry: string;
+    brandForecast: ForecastCategory | "";
+    newContactName: string;
+    newContactPosition: string;
+    newContactEmail: string;
+    newContactPhone: string;
+  }) {
     if (useExistingContacts) {
       if (selectedContactIds.length === 0) {
-        errs.brandContacts = "Select at least one existing contact.";
+        brandForm.setError("brandName", { message: "Select at least one existing contact." });
+        return;
       }
     } else {
-      if (!newContactName.trim()) errs.newContactName = "Name is required";
-      if (!newContactPosition.trim()) errs.newContactPosition = "Position is required";
-      if (!newContactEmail.trim()) errs.newContactEmail = "Email is required";
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newContactEmail.trim())) errs.newContactEmail = "Enter a valid email";
-      if (!newContactPhone.trim()) errs.newContactPhone = "Phone is required";
+      if (!values.newContactName.trim() || !values.newContactPosition.trim() || !values.newContactEmail.trim() || !values.newContactPhone.trim()) return;
     }
-    setBrandErrors(errs);
-    if (Object.keys(errs).length > 0) return;
 
     try {
       const shouldIncludeExistingContacts =
         useExistingContacts || (Boolean(editingBrandId) && selectedContactIds.length > 0);
-      const shouldIncludeNewContact = !useExistingContacts && newContactName.trim();
+      const shouldIncludeNewContact = !useExistingContacts && values.newContactName.trim();
 
       const payload = {
-        name: brandName.trim(),
-        priority: brandPriority as Priority,
-        expectedRevenue: Number(brandRevenue),
-        industry: brandIndustry.trim(),
-        forecastCategory: brandForecast || undefined,
+        name: values.brandName.trim(),
+        priority: values.brandPriority as Priority,
+        expectedRevenue: Number(values.brandRevenue),
+        industry: values.brandIndustry.trim(),
+        forecastCategory: values.brandForecast || undefined,
         existingContactIds: shouldIncludeExistingContacts ? selectedContactIds : [],
         newContacts: shouldIncludeNewContact
           ? [{
-              name: newContactName.trim(),
-              position: newContactPosition.trim() || undefined,
-              email: newContactEmail.trim() || undefined,
-              phone: newContactPhone.trim() || undefined,
+              name: values.newContactName.trim(),
+              position: values.newContactPosition.trim() || undefined,
+              email: values.newContactEmail.trim() || undefined,
+              phone: values.newContactPhone.trim() || undefined,
             }]
           : undefined,
       };
@@ -324,18 +317,9 @@ export default function BrandsPage() {
         await createBrand(payload).unwrap();
         setNotice({ type: "success", text: "Brand created." });
       }
-      setBrandName("");
-      setBrandPriority("");
-      setBrandRevenue("");
-      setBrandIndustry("");
-      setBrandForecast("");
+      brandForm.reset();
       setSelectedContactIds([]);
-      setNewContactName("");
-      setNewContactPosition("");
-      setNewContactEmail("");
-      setNewContactPhone("");
       setUseExistingContacts(true);
-      setBrandErrors({});
       setShowCreateBrandModal(false);
       setEditingBrandId(null);
       setInitialEditState(null);
@@ -359,22 +343,23 @@ export default function BrandsPage() {
     const brand = brands.data?.find((item) => item.id === id);
     if (!brand) return;
     setEditingBrandId(brand.id);
-    setBrandName(brand.name ?? "");
-    setBrandPriority(brand.priority ?? "");
-    setBrandRevenue(String(brand.expectedRevenue ?? ""));
-    setBrandIndustry(brand.industry ?? "");
-    setBrandForecast(brand.forecastCategory ?? "");
+    brandForm.reset({
+      brandName: brand.name ?? "",
+      brandPriority: (brand.priority ?? "") as Priority | "",
+      brandRevenue: String(brand.expectedRevenue ?? ""),
+      brandIndustry: brand.industry ?? "",
+      brandForecast: (brand.forecastCategory ?? "") as ForecastCategory | "",
+      newContactName: "",
+      newContactPosition: "",
+      newContactEmail: "",
+      newContactPhone: "",
+    });
     setSelectedContactIds(brand.contacts?.map((contact) => contact.id) ?? []);
-    setNewContactName("");
-    setNewContactPosition("");
-    setNewContactEmail("");
-    setNewContactPhone("");
     setUseExistingContacts(true);
     setContactSearchInput("");
     setDebouncedContactSearch("");
     setContactsVisibleCount(20);
     setIsContactDropdownOpen(false);
-    setBrandErrors({});
     setInitialEditState({
       name: (brand.name ?? "").trim(),
       priority: (brand.priority ?? "") as Priority | "",
@@ -400,23 +385,14 @@ export default function BrandsPage() {
   function onOpenCreateBrandModal() {
     void contacts.refetch();
     setEditingBrandId(null);
-    setBrandName("");
-    setBrandPriority("");
-    setBrandRevenue("");
-    setBrandIndustry("");
-    setBrandForecast("");
+    brandForm.reset();
     setSelectedContactIds([]);
-    setNewContactName("");
-    setNewContactPosition("");
-    setNewContactEmail("");
-    setNewContactPhone("");
     setUseExistingContacts(true);
     setContactSearchInput("");
     setDebouncedContactSearch("");
     setContactsVisibleCount(20);
     setIsContactDropdownOpen(false);
     setShowCreateBrandModal(true);
-    setBrandErrors({});
     setInitialEditState(null);
   }
 
@@ -424,7 +400,6 @@ export default function BrandsPage() {
     setShowCreateBrandModal(false);
     setEditingBrandId(null);
     setInitialEditState(null);
-    setBrandErrors({});
   }
 
   function removeSelectedContact(contactId: string) {
@@ -582,31 +557,37 @@ export default function BrandsPage() {
                 </button>
               </div>
 
-              <form className="space-y-3" onSubmit={onSubmitBrandForm} noValidate>
+              <form className="space-y-3" onSubmit={brandForm.handleSubmit(onSubmitBrandForm)} noValidate>
                 <div className="space-y-1">
                   <Label htmlFor="brandName">Name *</Label>
                   <Input
                     id="brandName"
                     placeholder="Acme Corp"
-                    value={brandName}
-                    onChange={(e) => setBrandName(e.target.value)}
+                    {...brandForm.register("brandName", { required: "Name is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={brandErrors.brandName} />
+                  <FieldError msg={brandForm.formState.errors.brandName?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="brandPriority">Priority *</Label>
-                  <Select
-                    id="brandPriority"
-                    value={brandPriority}
-                    onChange={setBrandPriority}
-                    options={PRIORITIES}
-                    placeholder="Select..."
-                    className={isDarkTheme
-                      ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
-                      : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
+                  <Controller
+                    control={brandForm.control}
+                    name="brandPriority"
+                    rules={{ required: "Priority is required" }}
+                    render={({ field }) => (
+                      <Select
+                        id="brandPriority"
+                        value={field.value}
+                        onChange={field.onChange}
+                        options={PRIORITIES}
+                        placeholder="Select..."
+                        className={isDarkTheme
+                          ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
+                          : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
+                      />
+                    )}
                   />
-                  <FieldError msg={brandErrors.brandPriority} />
+                  <FieldError msg={brandForm.formState.errors.brandPriority?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="brandRevenue">Expected Revenue *</Label>
@@ -615,34 +596,41 @@ export default function BrandsPage() {
                     type="number"
                     min="0"
                     placeholder="50000"
-                    value={brandRevenue}
-                    onChange={(e) => setBrandRevenue(e.target.value)}
+                    {...brandForm.register("brandRevenue", {
+                      required: "Enter expected revenue",
+                      validate: (value) => (!isNaN(Number(value)) && Number(value) >= 0) || "Enter a valid non-negative number",
+                    })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={brandErrors.brandRevenue} />
+                  <FieldError msg={brandForm.formState.errors.brandRevenue?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="brandIndustry">Industry *</Label>
                   <Input
                     id="brandIndustry"
                     placeholder="Technology"
-                    value={brandIndustry}
-                    onChange={(e) => setBrandIndustry(e.target.value)}
+                    {...brandForm.register("brandIndustry", { required: "Industry is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={brandErrors.brandIndustry} />
+                  <FieldError msg={brandForm.formState.errors.brandIndustry?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="brandForecast">Forecast Category</Label>
-                  <Select
-                    id="brandForecast"
-                    value={brandForecast}
-                    onChange={setBrandForecast}
-                    options={FORECAST_CATEGORIES}
-                    placeholder="Select..."
-                    className={isDarkTheme
-                      ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
-                      : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
+                  <Controller
+                    control={brandForm.control}
+                    name="brandForecast"
+                    render={({ field }) => (
+                      <Select
+                        id="brandForecast"
+                        value={field.value}
+                        onChange={field.onChange}
+                        options={FORECAST_CATEGORIES}
+                        placeholder="Select..."
+                        className={isDarkTheme
+                          ? "ui-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
+                          : "ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
+                      />
+                    )}
                   />
                 </div>
                 <label className="flex items-center gap-2">
@@ -754,11 +742,10 @@ export default function BrandsPage() {
                         id="newContactName"
                         disabled={useExistingContacts}
                         placeholder="John Doe"
-                        value={newContactName}
-                        onChange={(e) => setNewContactName(e.target.value)}
+                        {...brandForm.register("newContactName", { required: !useExistingContacts ? "Name is required" : false })}
                         className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                       />
-                      {!useExistingContacts ? <FieldError msg={brandErrors.newContactName} /> : null}
+                      {!useExistingContacts ? <FieldError msg={brandForm.formState.errors.newContactName?.message} /> : null}
                     </div>
                     <div className="space-y-1">
                       <Label htmlFor="newContactPosition">Position *</Label>
@@ -766,11 +753,10 @@ export default function BrandsPage() {
                         id="newContactPosition"
                         disabled={useExistingContacts}
                         placeholder="Sales Manager"
-                        value={newContactPosition}
-                        onChange={(e) => setNewContactPosition(e.target.value)}
+                        {...brandForm.register("newContactPosition", { required: !useExistingContacts ? "Position is required" : false })}
                         className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                       />
-                      {!useExistingContacts ? <FieldError msg={brandErrors.newContactPosition} /> : null}
+                      {!useExistingContacts ? <FieldError msg={brandForm.formState.errors.newContactPosition?.message} /> : null}
                     </div>
                     <div className="space-y-1">
                       <Label htmlFor="newContactEmail">Email *</Label>
@@ -779,11 +765,13 @@ export default function BrandsPage() {
                         disabled={useExistingContacts}
                         type="email"
                         placeholder="name@company.com"
-                        value={newContactEmail}
-                        onChange={(e) => setNewContactEmail(e.target.value)}
+                        {...brandForm.register("newContactEmail", {
+                          required: !useExistingContacts ? "Email is required" : false,
+                          pattern: !useExistingContacts ? { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Enter a valid email" } : undefined,
+                        })}
                         className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                       />
-                      {!useExistingContacts ? <FieldError msg={brandErrors.newContactEmail} /> : null}
+                      {!useExistingContacts ? <FieldError msg={brandForm.formState.errors.newContactEmail?.message} /> : null}
                     </div>
                     <div className="space-y-1">
                       <Label htmlFor="newContactPhone">Phone *</Label>
@@ -791,15 +779,14 @@ export default function BrandsPage() {
                         id="newContactPhone"
                         disabled={useExistingContacts}
                         placeholder="+91 98765 43210"
-                        value={newContactPhone}
-                        onChange={(e) => setNewContactPhone(e.target.value)}
+                        {...brandForm.register("newContactPhone", { required: !useExistingContacts ? "Phone is required" : false })}
                         className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                       />
-                      {!useExistingContacts ? <FieldError msg={brandErrors.newContactPhone} /> : null}
+                      {!useExistingContacts ? <FieldError msg={brandForm.formState.errors.newContactPhone?.message} /> : null}
                     </div>
                   </div>
                 </div>
-                <FieldError msg={brandErrors.brandContacts} />
+                <FieldError msg={brandForm.formState.errors.brandName?.message === "Select at least one existing contact." ? brandForm.formState.errors.brandName.message : undefined} />
                 <div className="mt-4 flex justify-end gap-2">
                   <Button
                     type="button"

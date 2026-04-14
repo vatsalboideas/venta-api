@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -94,23 +95,22 @@ export default function ContactsPage() {
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">("system");
-  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
-
-  const [contactBrandId, setContactBrandId] = useState("");
-  const [contactName, setContactName] = useState("");
-  const [contactPosition, setContactPosition] = useState("");
-  const [contactEmail, setContactEmail] = useState("");
-  const [contactPhone, setContactPhone] = useState("");
-  const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
+  const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
+    if (typeof window === "undefined") return "system";
+    const stored = window.localStorage.getItem("venta-dashboard-theme");
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
 
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
-  const [editContactBrandId, setEditContactBrandId] = useState("");
-  const [editContactName, setEditContactName] = useState("");
-  const [editContactPosition, setEditContactPosition] = useState("");
-  const [editContactEmail, setEditContactEmail] = useState("");
-  const [editContactPhone, setEditContactPhone] = useState("");
-  const [editContactErrors, setEditContactErrors] = useState<Record<string, string>>({});
+  const createForm = useForm<{ brandId: string; name: string; position: string; email: string; phone: string }>({
+    defaultValues: { brandId: "", name: "", position: "", email: "", phone: "" },
+  });
+  const editForm = useForm<{ brandId: string; name: string; position: string; email: string; phone: string }>({
+    defaultValues: { brandId: "", name: "", position: "", email: "", phone: "" },
+  });
 
   const brands = useListBrandsQuery(undefined, { skip: !token });
   const contacts = useListContactsQuery(undefined, { skip: !token });
@@ -119,11 +119,7 @@ export default function ContactsPage() {
   const [updateContact, updateContactState] = useUpdateContactMutation();
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("venta-dashboard-theme");
-    if (stored === "light" || stored === "dark" || stored === "system") setThemeMode(stored);
-
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    setSystemPrefersDark(media.matches);
     const onSystemThemeChange = (event: MediaQueryListEvent) => setSystemPrefersDark(event.matches);
     media.addEventListener("change", onSystemThemeChange);
     return () => media.removeEventListener("change", onSystemThemeChange);
@@ -134,33 +130,17 @@ export default function ContactsPage() {
     window.localStorage.setItem("venta-dashboard-theme", value);
   }
 
-  async function onCreateContact(e: FormEvent) {
-    e.preventDefault();
-    const errs: Record<string, string> = {};
-    if (!contactBrandId) errs.brandId = "Select a brand";
-    if (!contactName.trim()) errs.name = "Name is required";
-    if (!contactPosition.trim()) errs.position = "Position is required";
-    if (!contactEmail.trim()) errs.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim())) errs.email = "Enter a valid email";
-    if (!contactPhone.trim()) errs.phone = "Phone is required";
-    setContactErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
+  async function onCreateContact(values: { brandId: string; name: string; position: string; email: string; phone: string }) {
     try {
       await createContact({
-        brandId: contactBrandId,
-        name: contactName.trim(),
-        position: contactPosition.trim(),
-        email: contactEmail.trim(),
-        phone: contactPhone.trim(),
+        brandId: values.brandId,
+        name: values.name.trim(),
+        position: values.position.trim(),
+        email: values.email.trim(),
+        phone: values.phone.trim(),
       }).unwrap();
       setNotice({ type: "success", text: "Contact created." });
-      setContactBrandId("");
-      setContactName("");
-      setContactPosition("");
-      setContactEmail("");
-      setContactPhone("");
-      setContactErrors({});
+      createForm.reset();
     } catch (err) {
       setNotice({ type: "error", text: getErrorMessage(err) });
     }
@@ -180,41 +160,31 @@ export default function ContactsPage() {
     const contact = contacts.data?.find((item) => item.id === id);
     if (!contact) return;
     setEditingContactId(contact.id);
-    setEditContactBrandId(contact.brandId ?? "");
-    setEditContactName(contact.name ?? "");
-    setEditContactPosition(contact.position ?? "");
-    setEditContactEmail(contact.email ?? "");
-    setEditContactPhone(contact.phone ?? "");
-    setEditContactErrors({});
+    editForm.reset({
+      brandId: contact.brandId ?? "",
+      name: contact.name ?? "",
+      position: contact.position ?? "",
+      email: contact.email ?? "",
+      phone: contact.phone ?? "",
+    });
   }
 
   function onCloseEditContact() {
     setEditingContactId(null);
-    setEditContactErrors({});
+    editForm.reset();
   }
 
-  async function onUpdateContact(e: FormEvent) {
-    e.preventDefault();
+  async function onUpdateContact(values: { brandId: string; name: string; position: string; email: string; phone: string }) {
     if (!editingContactId) return;
-
-    const errs: Record<string, string> = {};
-    if (!editContactBrandId) errs.brandId = "Select a brand";
-    if (!editContactName.trim()) errs.name = "Name is required";
-    if (!editContactPosition.trim()) errs.position = "Position is required";
-    if (!editContactEmail.trim()) errs.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editContactEmail.trim())) errs.email = "Enter a valid email";
-    if (!editContactPhone.trim()) errs.phone = "Phone is required";
-    setEditContactErrors(errs);
-    if (Object.keys(errs).length > 0) return;
 
     try {
       await updateContact({
         id: editingContactId,
-        brandId: editContactBrandId,
-        name: editContactName.trim(),
-        position: editContactPosition.trim(),
-        email: editContactEmail.trim(),
-        phone: editContactPhone.trim(),
+        brandId: values.brandId,
+        name: values.name.trim(),
+        position: values.position.trim(),
+        email: values.email.trim(),
+        phone: values.phone.trim(),
       }).unwrap();
       setNotice({ type: "success", text: "Contact updated." });
       onCloseEditContact();
@@ -294,13 +264,12 @@ export default function ContactsPage() {
                 <CardTitle>New Contact</CardTitle>
               </CardHeader>
               <CardContent>
-                <form className="space-y-3" onSubmit={onCreateContact} noValidate>
+                <form className="space-y-3" onSubmit={createForm.handleSubmit(onCreateContact)} noValidate>
                   <div className="space-y-1">
                     <Label htmlFor="contactBrand">Brand *</Label>
                     <select
                       id="contactBrand"
-                      value={contactBrandId}
-                      onChange={(e) => setContactBrandId(e.target.value)}
+                      {...createForm.register("brandId", { required: "Select a brand" })}
                       className={isDarkTheme
                         ? "ui-native-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
                         : "ui-native-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
@@ -308,29 +277,27 @@ export default function ContactsPage() {
                       <option value="">Select brand...</option>
                       {brands.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
-                    <FieldError msg={contactErrors.brandId} />
+                    <FieldError msg={createForm.formState.errors.brandId?.message} />
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="contactName">Name *</Label>
                     <Input
                       id="contactName"
                       placeholder="John Doe"
-                      value={contactName}
-                      onChange={(e) => setContactName(e.target.value)}
+                      {...createForm.register("name", { required: "Name is required" })}
                       className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                     />
-                    <FieldError msg={contactErrors.name} />
+                    <FieldError msg={createForm.formState.errors.name?.message} />
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="contactPosition">Position *</Label>
                     <Input
                       id="contactPosition"
                       placeholder="Sales Manager"
-                      value={contactPosition}
-                      onChange={(e) => setContactPosition(e.target.value)}
+                      {...createForm.register("position", { required: "Position is required" })}
                       className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                     />
-                    <FieldError msg={contactErrors.position} />
+                    <FieldError msg={createForm.formState.errors.position?.message} />
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="contactEmail">Email *</Label>
@@ -338,22 +305,23 @@ export default function ContactsPage() {
                       id="contactEmail"
                       type="email"
                       placeholder="name@company.com"
-                      value={contactEmail}
-                      onChange={(e) => setContactEmail(e.target.value)}
+                      {...createForm.register("email", {
+                        required: "Email is required",
+                        pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Enter a valid email" },
+                      })}
                       className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                     />
-                    <FieldError msg={contactErrors.email} />
+                    <FieldError msg={createForm.formState.errors.email?.message} />
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="contactPhone">Phone *</Label>
                     <Input
                       id="contactPhone"
                       placeholder="+91 98765 43210"
-                      value={contactPhone}
-                      onChange={(e) => setContactPhone(e.target.value)}
+                      {...createForm.register("phone", { required: "Phone is required" })}
                       className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                     />
-                    <FieldError msg={contactErrors.phone} />
+                    <FieldError msg={createForm.formState.errors.phone?.message} />
                   </div>
                   <Button className={isDarkTheme ? "w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "w-full"} disabled={createContactState.isLoading}>
                     {createContactState.isLoading ? "Saving..." : "Create Contact"}
@@ -435,13 +403,12 @@ export default function ContactsPage() {
                 </button>
               </div>
 
-              <form className="space-y-3" onSubmit={onUpdateContact} noValidate>
+              <form className="space-y-3" onSubmit={editForm.handleSubmit(onUpdateContact)} noValidate>
                 <div className="space-y-1">
                   <Label htmlFor="editContactBrand">Brand *</Label>
                   <select
                     id="editContactBrand"
-                    value={editContactBrandId}
-                    onChange={(e) => setEditContactBrandId(e.target.value)}
+                    {...editForm.register("brandId", { required: "Select a brand" })}
                     className={isDarkTheme
                       ? "ui-native-select flex h-10 w-full rounded-md border border-white/15 bg-slate-800 px-3 py-2 text-sm text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30"
                       : "ui-native-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"}
@@ -449,48 +416,47 @@ export default function ContactsPage() {
                     <option value="">Select brand...</option>
                     {brands.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
-                  <FieldError msg={editContactErrors.brandId} />
+                  <FieldError msg={editForm.formState.errors.brandId?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editContactName">Name *</Label>
                   <Input
                     id="editContactName"
-                    value={editContactName}
-                    onChange={(e) => setEditContactName(e.target.value)}
+                    {...editForm.register("name", { required: "Name is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={editContactErrors.name} />
+                  <FieldError msg={editForm.formState.errors.name?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editContactPosition">Position *</Label>
                   <Input
                     id="editContactPosition"
-                    value={editContactPosition}
-                    onChange={(e) => setEditContactPosition(e.target.value)}
+                    {...editForm.register("position", { required: "Position is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={editContactErrors.position} />
+                  <FieldError msg={editForm.formState.errors.position?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editContactEmail">Email *</Label>
                   <Input
                     id="editContactEmail"
                     type="email"
-                    value={editContactEmail}
-                    onChange={(e) => setEditContactEmail(e.target.value)}
+                    {...editForm.register("email", {
+                      required: "Email is required",
+                      pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Enter a valid email" },
+                    })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={editContactErrors.email} />
+                  <FieldError msg={editForm.formState.errors.email?.message} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editContactPhone">Phone *</Label>
                   <Input
                     id="editContactPhone"
-                    value={editContactPhone}
-                    onChange={(e) => setEditContactPhone(e.target.value)}
+                    {...editForm.register("phone", { required: "Phone is required" })}
                     className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
                   />
-                  <FieldError msg={editContactErrors.phone} />
+                  <FieldError msg={editForm.formState.errors.phone?.message} />
                 </div>
 
                 <div className="mt-4 flex justify-end gap-2">

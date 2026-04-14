@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 import Link from "next/link";
 
@@ -111,30 +112,6 @@ function TableEmpty({ cols, message = "No records yet." }: { cols: number; messa
 
 // ── Select helper ─────────────────────────────────────────────────────────────
 
-function Select<T extends string>({
-  id, value, onChange, options, placeholder,
-}: {
-  id?: string;
-  value: T | "";
-  onChange: (v: T) => void;
-  options: readonly T[];
-  placeholder?: string;
-}) {
-  return (
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value as T)}
-      className="ui-select flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
-    >
-      {placeholder && <option value="">{placeholder}</option>}
-      {options.map((o) => (
-        <option key={o} value={o}>{statusLabel(o)}</option>
-      ))}
-    </select>
-  );
-}
-
 // ── Field error helper ────────────────────────────────────────────────────────
 
 function FieldError({ msg }: { msg?: string }) {
@@ -145,39 +122,21 @@ function FieldError({ msg }: { msg?: string }) {
 // ── LOGIN / REGISTER page ──────────────────────────────────────────────────────
 
 function AuthPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [tempToken, setTempToken] = useState("");
-  const [otp, setOtp] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const loginForm = useForm<{ email: string; password: string }>({ defaultValues: { email: "", password: "" } });
+  const otpForm = useForm<{ otp: string }>({ defaultValues: { otp: "" } });
 
   const [login, loginState] = useLoginMutation();
   const [verify2FA, verify2FAState] = useVerifyTwoFAMutation();
 
-  function validateLogin() {
-    const errs: Record<string, string> = {};
-    if (!email.trim()) errs.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.email = "Enter a valid email";
-    if (!password) errs.password = "Password is required";
-    setFieldErrors(errs);
-    return Object.keys(errs).length === 0;
-  }
-
-  async function onLogin(e: FormEvent) {
-    e.preventDefault();
-    if (!validateLogin()) return;
+  async function onLogin(values: { email: string; password: string }) {
     // Always reset stale 2FA challenge before a fresh login attempt.
     setTempToken("");
-    setOtp("");
-    setFieldErrors((prev) => {
-      const next = { ...prev };
-      delete next.otp;
-      return next;
-    });
+    otpForm.reset({ otp: "" });
     try {
-      const response = await login({ email, password }).unwrap();
+      const response = await login({ email: values.email, password: values.password }).unwrap();
       if (response.requiresTwoFactor) {
         setTempToken(response.tempToken);
         setNotice({ type: "success", text: "Password verified. Enter your 2FA code." });
@@ -186,16 +145,15 @@ function AuthPage() {
       persistToken(response.accessToken);
     } catch (error) {
       setTempToken("");
-      setOtp("");
+      otpForm.reset({ otp: "" });
       setNotice({ type: "error", text: getErrorMessage(error) });
     }
   }
 
-  async function onVerify2FA(e: FormEvent) {
-    e.preventDefault();
-    if (!otp.trim()) { setFieldErrors({ otp: "Code is required" }); return; }
+  async function onVerify2FA(values: { otp: string }) {
+    if (!values.otp.trim()) return;
     try {
-      const response = await verify2FA({ tempToken, token: otp }).unwrap();
+      const response = await verify2FA({ tempToken, token: values.otp }).unwrap();
       persistToken(response.accessToken);
     } catch (error) {
       setNotice({ type: "error", text: getErrorMessage(error) });
@@ -231,18 +189,20 @@ function AuthPage() {
           <CardContent className="space-y-4 pt-5">
             {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
 
-            <form className="space-y-4" onSubmit={onLogin} noValidate>
+            <form className="space-y-4" onSubmit={loginForm.handleSubmit(onLogin)} noValidate>
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-slate-200">Email</Label>
                 <Input
                   id="email"
                   type="email"
                   placeholder="you@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  {...loginForm.register("email", {
+                    required: "Email is required",
+                    pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Enter a valid email" },
+                  })}
                   className="h-11 rounded-lg border-white/15 bg-slate-800/90 px-3.5 text-[15px] text-slate-100 placeholder:text-slate-400 shadow-sm transition focus-visible:border-cyan-400 focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-cyan-400/25"
                 />
-                <FieldError msg={fieldErrors.email} />
+                <FieldError msg={loginForm.formState.errors.email?.message} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="password" className="text-slate-200">Password</Label>
@@ -251,8 +211,7 @@ function AuthPage() {
                     id="password"
                     type={showPassword ? "text" : "password"}
                     placeholder="Enter your password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    {...loginForm.register("password", { required: "Password is required" })}
                     className="h-11 rounded-lg border-white/15 bg-slate-800/90 px-3.5 pr-16 text-[15px] text-slate-100 placeholder:text-slate-400 shadow-sm transition focus-visible:border-cyan-400 focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-cyan-400/25"
                   />
                   <button
@@ -264,7 +223,7 @@ function AuthPage() {
                     {showPassword ? "Hide" : "Show"}
                   </button>
                 </div>
-                <FieldError msg={fieldErrors.password} />
+                <FieldError msg={loginForm.formState.errors.password?.message} />
               </div>
               <Button className="w-full" disabled={loginState.isLoading}>
                 {loginState.isLoading ? "Signing in…" : "Sign in"}
@@ -272,7 +231,7 @@ function AuthPage() {
             </form>
 
             {tempToken && (
-              <form className="space-y-3 rounded-md border border-white/10 bg-slate-900/70 p-4" onSubmit={onVerify2FA} noValidate>
+              <form className="space-y-3 rounded-md border border-white/10 bg-slate-900/70 p-4" onSubmit={otpForm.handleSubmit(onVerify2FA)} noValidate>
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Two-factor authentication</p>
                 <div className="space-y-1.5">
                   <Label htmlFor="otp" className="text-slate-200">Authenticator Code</Label>
@@ -281,11 +240,10 @@ function AuthPage() {
                     inputMode="numeric"
                     placeholder="6-digit code"
                     maxLength={6}
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
+                    {...otpForm.register("otp", { required: "Code is required" })}
                     className="h-11 rounded-lg border-white/15 bg-slate-800/90 px-3.5 text-[15px] text-slate-100 placeholder:text-slate-400 shadow-sm transition focus-visible:border-cyan-400 focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-cyan-400/25"
                   />
-                  <FieldError msg={fieldErrors.otp} />
+                  <FieldError msg={otpForm.formState.errors.otp?.message} />
                 </div>
                 <Button className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400" disabled={verify2FAState.isLoading}>
                   {verify2FAState.isLoading ? "Verifying…" : "Verify 2FA"}
@@ -303,8 +261,14 @@ function AuthPage() {
 
 function Dashboard() {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
-  const [systemPrefersDark, setSystemPrefersDark] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window === "undefined") return "system";
+    const stored = window.localStorage.getItem("venta-dashboard-theme");
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
 
   // ── Queries
   const me = useMeQuery();
@@ -345,13 +309,7 @@ function Dashboard() {
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("venta-dashboard-theme");
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      setThemeMode(stored);
-    }
-
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    setSystemPrefersDark(media.matches);
 
     const onSystemThemeChange = (event: MediaQueryListEvent) => {
       setSystemPrefersDark(event.matches);
