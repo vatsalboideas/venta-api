@@ -254,9 +254,9 @@ export default function BrandsPage() {
         newContacts: shouldIncludeNewContact
           ? [{
               name: values.newContactName.trim(),
-              position: values.newContactPosition.trim() || undefined,
-              email: values.newContactEmail.trim() || undefined,
-              phone: values.newContactPhone.trim() || undefined,
+              position: values.newContactPosition.trim(),
+              email: values.newContactEmail.trim(),
+              phone: values.newContactPhone.trim(),
             }]
           : undefined,
       };
