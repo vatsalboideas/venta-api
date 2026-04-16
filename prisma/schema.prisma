@@ -9,6 +9,7 @@ datasource db {
 
 enum Role {
   BOSS
+  MANAGER
   EMPLOYEE
   INTERN
 }
@@ -34,6 +35,11 @@ enum LogStatus {
   CLOSED_LOST
 }
 
+enum LogRevisionType {
+  CREATED
+  UPDATED
+}
+
 model User {
   id            String    @id @default(uuid())
   name          String
@@ -51,6 +57,8 @@ model User {
   ownedBrands   Brand[]   @relation("BrandOwner")
   contactsMade  Contact[] @relation("ContactCreator")
   assignedLogs  Log[]     @relation("LogAssignee")
+  assignedLogRevisions LogRevision[] @relation("LogRevisionAssignee")
+  logRevisionsEdited   LogRevision[] @relation("LogRevisionEditor")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -71,6 +79,7 @@ model Brand {
   owner            User             @relation("BrandOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   contacts         Contact[]
   logs             Log[]
+  logRevisions     LogRevision[]
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
@@ -90,6 +99,7 @@ model Contact {
   createdBy  String   @map("created_by")
   creator    User     @relation("ContactCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   logs       Log[]
+  logRevisions LogRevision[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -114,6 +124,7 @@ model Log {
   meetingDate     DateTime  @map("meeting_date")
   actualRevenue   Decimal   @db.Decimal(14, 2) @map("actual_revenue")
   notes           String
+  revisions       LogRevision[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -122,4 +133,32 @@ model Log {
   @@index([assignedTo])
   @@index([status])
   @@map("logs")
+}
+
+model LogRevision {
+  id              String          @id @default(uuid())
+  logId           String          @map("log_id")
+  log             Log             @relation(fields: [logId], references: [id], onDelete: Cascade)
+  revisionType    LogRevisionType @map("revision_type")
+  title           String
+  brandId         String          @map("brand_id")
+  brand           Brand           @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  contactId       String          @map("contact_id")
+  contact         Contact         @relation(fields: [contactId], references: [id], onDelete: Restrict)
+  status          LogStatus
+  priority        Priority
+  assignedTo      String          @map("assigned_to")
+  assignee        User            @relation("LogRevisionAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
+  lastContactDate DateTime        @map("last_contact_date")
+  followUpDate    DateTime        @map("follow_up_date")
+  meetingDate     DateTime        @map("meeting_date")
+  actualRevenue   Decimal         @db.Decimal(14, 2) @map("actual_revenue")
+  notes           String
+  changedBy       String          @map("changed_by")
+  changedByUser   User            @relation("LogRevisionEditor", fields: [changedBy], references: [id], onDelete: Restrict)
+  changedAt       DateTime        @default(now()) @map("changed_at")
+
+  @@index([logId, changedAt])
+  @@index([changedBy])
+  @@map("log_revisions")
 }

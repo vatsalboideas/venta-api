@@ -1,52 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
+import Skeleton from "react-loading-skeleton";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { getErrorMessage } from "@/lib/error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { persistToken } from "@/store/provider";
 import { useCreateInternMutation, useListUsersQuery, useMeQuery } from "@/store/services/api";
 import type { RootState } from "@/store";
 
-type Notice = { type: "success" | "error"; text: string };
-
-function getErrorMessage(error: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
-  if (!error || typeof error !== "object") return fallback;
-  const e = error as { data?: { message?: string }; error?: string; status?: number };
-  if (e.data?.message) return e.data.message;
-  if (e.error) return e.error;
-  if (e.status) return `Request failed with status ${e.status}.`;
-  return fallback;
-}
-
 function roleLabel(role: string) {
-  const map: Record<string, string> = { BOSS: "Boss", EMPLOYEE: "Employee", INTERN: "Intern" };
+  const map: Record<string, string> = { BOSS: "Boss", MANAGER: "Manager", EMPLOYEE: "Employee", INTERN: "Intern" };
   return map[role] ?? role;
-}
-
-function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
-  return (
-    <div
-      className={`flex items-center justify-between rounded-md border px-4 py-2 text-sm ${
-        notice.type === "success"
-          ? "border-green-300 bg-green-50 text-green-800"
-          : "border-red-300 bg-red-50 text-red-800"
-      }`}
-    >
-      <span>{notice.text}</span>
-      <button onClick={onDismiss} className="ml-4 font-bold opacity-60 hover:opacity-100">
-        x
-      </button>
-    </div>
-  );
 }
 
 function FieldError({ msg }: { msg?: string }) {
@@ -58,7 +31,6 @@ export default function EmployeesPage() {
   const token = useSelector((state: RootState) => state.auth.token);
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
     if (typeof window === "undefined") return "system";
     const stored = window.localStorage.getItem("venta-dashboard-theme");
@@ -67,8 +39,11 @@ export default function EmployeesPage() {
   const [systemPrefersDark, setSystemPrefersDark] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
-  const [createdByMeOnly, setCreatedByMeOnly] = useState(false);
   const [showCreateInternModal, setShowCreateInternModal] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState(12);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const createInternForm = useForm<{
     name: string;
@@ -80,7 +55,10 @@ export default function EmployeesPage() {
   }>({ defaultValues: { name: "", email: "", password: "", phone: "", department: "", position: "" } });
 
   const me = useMeQuery(undefined, { skip: !token });
-  const users = useListUsersQuery({ createdByMe: createdByMeOnly }, { skip: !token });
+  const users = useListUsersQuery(
+    { q: debouncedSearch.trim() || undefined, page: 1, limit: visibleLimit },
+    { skip: !token },
+  );
   const [createIntern, createInternState] = useCreateInternMutation();
 
   useEffect(() => {
@@ -90,9 +68,40 @@ export default function EmployeesPage() {
     return () => media.removeEventListener("change", onSystemThemeChange);
   }, []);
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(searchInput);
+      setVisibleLimit(12);
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
+
+  const employees = users.data ?? [];
+  const hasMore = employees.length >= visibleLimit;
+
+  useEffect(() => {
+    if (!hasMore || users.isLoading || users.isFetching || users.isError) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          observer.disconnect();
+          setVisibleLimit((current) => current + 12);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, users.isLoading, users.isFetching, users.isError]);
+
   function onThemeChange(value: "light" | "dark" | "system") {
     setThemeMode(value);
     window.localStorage.setItem("venta-dashboard-theme", value);
+    window.dispatchEvent(new CustomEvent("venta-theme-change", { detail: value }));
   }
 
   async function onCreateIntern(values: {
@@ -112,11 +121,11 @@ export default function EmployeesPage() {
         department: values.department.trim() || undefined,
         position: values.position.trim() || undefined,
       }).unwrap();
-      setNotice({ type: "success", text: "Intern created successfully." });
+      notifySuccess("Intern created successfully.");
       createInternForm.reset();
       setShowCreateInternModal(false);
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Create intern failed"));
     }
   }
 
@@ -130,12 +139,24 @@ export default function EmployeesPage() {
     createInternForm.reset();
   }
 
-  const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && showCreateInternModal) {
+        setShowCreateInternModal(false);
+        createInternForm.reset();
+      }
+    };
 
-  const title = useMemo(
-    () => (createdByMeOnly ? "Employees & Interns Created by Me" : "All Employees & Interns"),
-    [createdByMeOnly],
-  );
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [createInternForm, showCreateInternModal]);
+
+  const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
+    ? ({ "--base-color": "#1e293b", "--highlight-color": "#334155" } as CSSProperties)
+    : undefined;
+
+  const title = useMemo(() => "All Employees & Interns", []);
 
   if (!initialized) {
     return (
@@ -165,7 +186,7 @@ export default function EmployeesPage() {
 
   return (
     <AppShell isDarkTheme={isDarkTheme}>
-      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"}>
+      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"} style={skeletonThemeStyle}>
         <header className={isDarkTheme ? "border-b border-white/10 bg-slate-900 px-6 py-3 shadow-sm shadow-black/20" : "border-b bg-white px-6 py-3 shadow-sm"}>
           <div className="mx-auto flex max-w-7xl items-center justify-between">
             <div className="flex items-center gap-3">
@@ -198,22 +219,20 @@ export default function EmployeesPage() {
         </header>
 
         <div className="mx-auto max-w-7xl space-y-6 p-6">
-          {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-
           <div className="grid gap-6">
             <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20" : undefined}>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <CardTitle>{title}</CardTitle>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={createdByMeOnly}
-                        onChange={(e) => setCreatedByMeOnly(e.target.checked)}
-                      />
-                      <span className={isDarkTheme ? "text-slate-300" : "text-slate-600"}>Created by me</span>
-                    </label>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                    <Input
+                      value={searchInput}
+                      onChange={(event) => setSearchInput(event.target.value)}
+                      placeholder="Search by name, role, email, department, position, added by..."
+                      className={isDarkTheme
+                        ? "w-full border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 sm:w-96"
+                        : "w-full sm:w-96"}
+                    />
                     <Button
                       className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined}
                       onClick={onOpenCreateInternModal}
@@ -227,52 +246,85 @@ export default function EmployeesPage() {
                 <p className={isDarkTheme ? "mb-4 text-xs text-slate-400" : "mb-4 text-xs text-slate-500"}>
                   Logged in as: {me.data?.name ?? "Unknown user"}
                 </p>
-                <Table>
-                  <THead>
-                    <TR>
-                      <TH>Name</TH>
-                      <TH>Role</TH>
-                      <TH>Email</TH>
-                      <TH>Department</TH>
-                      <TH>Position</TH>
-                      <TH>Added by</TH>
-                    </TR>
-                  </THead>
-                  <TBody>
-                    {users.isLoading ? (
-                      <TR>
-                        <TD colSpan={6} className="py-4 text-center text-slate-400">Loading...</TD>
-                      </TR>
+                {users.isLoading && visibleLimit === 12 ? (
+                  <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/40 p-6" : "rounded-md border border-slate-200 bg-slate-50 p-6"}>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                      {Array.from({ length: 8 }).map((_, idx) => (
+                        <div key={idx} className="rounded-md border border-slate-200 p-4">
+                          <Skeleton height={18} width="55%" />
+                          <Skeleton height={14} count={4} className="mt-2" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {users.isError ? (
+                  <div className={isDarkTheme ? "rounded-md border border-red-500/40 bg-red-950/30 p-6 text-center text-red-200" : "rounded-md border border-red-200 bg-red-50 p-6 text-center text-red-600"}>
+                    Failed to load employees.{" "}
+                    <button onClick={() => users.refetch()} className="underline hover:opacity-70">
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
+                {!users.isLoading && !users.isError && employees.length === 0 ? (
+                  <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/40 p-6 text-center text-slate-300" : "rounded-md border border-slate-200 bg-slate-50 p-6 text-center text-slate-500"}>
+                    {debouncedSearch.trim() ? "No employees match your search." : "No users found."}
+                  </div>
+                ) : null}
+                {!users.isLoading && !users.isError && employees.length > 0 ? (
+                  <div className="space-y-3">
+                    <p className={isDarkTheme ? "text-xs text-slate-400" : "text-xs text-slate-500"}>
+                      Showing {employees.length} {employees.length === 1 ? "employee" : "employees"}
+                    </p>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                      {employees.map((user) => (
+                        <Card key={user.id} className={isDarkTheme ? "border-white/10 bg-slate-800/70" : "border-slate-200 bg-white"}>
+                          <CardContent className="space-y-3 p-4">
+                            <div className="space-y-1">
+                              <p className={isDarkTheme ? "text-base font-semibold text-white" : "text-base font-semibold text-slate-900"}>
+                                {user.name}
+                              </p>
+                              <p className={isDarkTheme ? "text-sm text-cyan-300" : "text-sm text-cyan-700"}>
+                                {roleLabel(user.role)}
+                              </p>
+                            </div>
+                            <div className="space-y-1 text-sm">
+                              <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}>
+                                <span className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>Email:</span>{" "}
+                                {user.email}
+                              </p>
+                              <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}>
+                                <span className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>Department:</span>{" "}
+                                {user.department ?? "-"}
+                              </p>
+                              <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}>
+                                <span className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>Position:</span>{" "}
+                                {user.position ?? "-"}
+                              </p>
+                              <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}>
+                                <span className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>Added by:</span>{" "}
+                                {user.creator?.name ?? (user.createdBy ? user.createdBy : "-")}
+                              </p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                    {users.isFetching ? (
+                      <div className={isDarkTheme ? "py-3 text-center text-sm text-slate-400" : "py-3 text-center text-sm text-slate-500"}>
+                        <Skeleton height={14} width={160} className="mx-auto" />
+                      </div>
                     ) : null}
-                    {users.isError ? (
-                      <TR>
-                        <TD colSpan={6} className="py-4 text-center text-red-600">
-                          Failed to load.{" "}
-                          <button onClick={() => users.refetch()} className="underline hover:opacity-70">
-                            Retry
-                          </button>
-                        </TD>
-                      </TR>
+                    {!users.isFetching && hasMore ? (
+                      <div ref={loadMoreRef} className="h-1 w-full" aria-hidden />
                     ) : null}
-                    {users.data?.length === 0 ? (
-                      <TR>
-                        <TD colSpan={6} className="py-4 text-center text-slate-400">No users found.</TD>
-                      </TR>
+                    {!users.isFetching && !hasMore ? (
+                      <div className={isDarkTheme ? "py-1 text-center text-xs text-slate-500" : "py-1 text-center text-xs text-slate-400"}>
+                        End of employee list
+                      </div>
                     ) : null}
-                    {users.data?.map((user) => (
-                      <TR key={user.id}>
-                        <TD className="font-medium">{user.name}</TD>
-                        <TD>{roleLabel(user.role)}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{user.email}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{user.department ?? "-"}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{user.position ?? "-"}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>
-                          {user.creator?.name ?? (user.createdBy ? user.createdBy : "-")}
-                        </TD>
-                      </TR>
-                    ))}
-                  </TBody>
-                </Table>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>

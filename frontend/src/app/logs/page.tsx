@@ -1,20 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useSelector } from "react-redux";
+import Skeleton from "react-loading-skeleton";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { formatInrCurrency } from "@/lib/currency";
+import { formatDateDDMonYYYY } from "@/lib/date";
+import { getErrorMessage } from "@/lib/error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { persistToken } from "@/store/provider";
 import {
   useCreateLogMutation,
   useDeleteLogMutation,
+  useGetLogRevisionsQuery,
   useListBrandsQuery,
   useListContactsQuery,
   useListLogsQuery,
@@ -24,77 +29,13 @@ import type { RootState } from "@/store";
 import type { LogStatus, Priority } from "@/types/api";
 import { LOG_STATUSES, PRIORITIES } from "@/types/api";
 
-type Notice = { type: "success" | "error"; text: string };
-
-function getErrorMessage(error: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
-  if (!error || typeof error !== "object") return fallback;
-  const e = error as { data?: { message?: string }; error?: string; status?: number };
-  if (e.data?.message) return e.data.message;
-  if (e.error) return e.error;
-  if (e.status) return `Request failed with status ${e.status}.`;
-  return fallback;
-}
-
 function statusLabel(s: string) {
   return s.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
-  return (
-    <div
-      className={`flex items-center justify-between rounded-md border px-4 py-2 text-sm ${
-        notice.type === "success"
-          ? "border-green-300 bg-green-50 text-green-800"
-          : "border-red-300 bg-red-50 text-red-800"
-      }`}
-    >
-      <span>{notice.text}</span>
-      <button onClick={onDismiss} className="ml-4 font-bold opacity-60 hover:opacity-100">
-        x
-      </button>
-    </div>
-  );
 }
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
   return <p className="mt-1 text-xs text-red-600">{msg}</p>;
-}
-
-function TableLoading({ cols }: { cols: number }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-slate-400">
-        Loading...
-      </TD>
-    </TR>
-  );
-}
-
-function TableError({ cols, onRetry }: { cols: number; onRetry?: () => void }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-red-600">
-        Failed to load.{" "}
-        {onRetry && (
-          <button onClick={onRetry} className="underline hover:opacity-70">
-            Retry
-          </button>
-        )}
-      </TD>
-    </TR>
-  );
-}
-
-function TableEmpty({ cols, message = "No records yet." }: { cols: number; message?: string }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-slate-400">
-        {message}
-      </TD>
-    </TR>
-  );
 }
 
 function Select<T extends string>({
@@ -216,9 +157,9 @@ function AutocompleteField({
           }
         >
           {loading ? (
-            <p className={isDarkTheme ? "px-3 py-2 text-sm text-slate-400" : "px-3 py-2 text-sm text-slate-500"}>
-              Loading options...
-            </p>
+            <div className="px-3 py-2">
+              <Skeleton height={12} count={3} />
+            </div>
           ) : visibleOptions.length > 0 ? (
             visibleOptions.map((option) => (
               <button
@@ -269,7 +210,6 @@ export default function LogsPage() {
   const token = useSelector((state: RootState) => state.auth.token);
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
     if (typeof window === "undefined") return "system";
     const stored = window.localStorage.getItem("venta-dashboard-theme");
@@ -282,6 +222,9 @@ export default function LogsPage() {
   const [showCreateLogModal, setShowCreateLogModal] = useState(false);
 
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [historyLogId, setHistoryLogId] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const createLogForm = useForm({
     defaultValues: {
       title: "",
@@ -319,6 +262,44 @@ export default function LogsPage() {
   const [createLog, createLogState] = useCreateLogMutation();
   const [deleteLog] = useDeleteLogMutation();
   const [updateLog, updateLogState] = useUpdateLogMutation();
+  const logRevisions = useGetLogRevisionsQuery(historyLogId ?? "", {
+    skip: !token || !historyLogId,
+  });
+  const searchTokens = useMemo(
+    () => debouncedSearchTerm.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    [debouncedSearchTerm],
+  );
+  const filteredLogs = useMemo(() => {
+    const rows = logs.data ?? [];
+    if (searchTokens.length === 0) return rows;
+    return rows.filter((log) => {
+      const haystack = [
+        log.title,
+        log.notes,
+        log.status,
+        statusLabel(log.status),
+        log.priority,
+        statusLabel(log.priority),
+        log.brand?.name ?? log.brandId,
+        log.contact?.name ?? log.contactId,
+        log.assignee?.name ?? log.assignedTo,
+        log.lastContactDate?.slice(0, 10),
+        log.followUpDate?.slice(0, 10),
+        log.meetingDate?.slice(0, 10),
+        String(log.actualRevenue),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return searchTokens.every((token) => haystack.includes(token));
+    });
+  }, [logs.data, searchTokens]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchInput);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -330,6 +311,7 @@ export default function LogsPage() {
   function onThemeChange(value: "light" | "dark" | "system") {
     setThemeMode(value);
     window.localStorage.setItem("venta-dashboard-theme", value);
+    window.dispatchEvent(new CustomEvent("venta-theme-change", { detail: value }));
   }
 
   async function onCreateLog(values: {
@@ -363,11 +345,11 @@ export default function LogsPage() {
         actualRevenue: Number(values.actualRevenue),
         notes: values.notes.trim(),
       }).unwrap();
-      setNotice({ type: "success", text: "Log created." });
+      notifySuccess("Log created.");
       createLogForm.reset();
       setShowCreateLogModal(false);
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Create log failed"));
     }
   }
 
@@ -375,9 +357,9 @@ export default function LogsPage() {
     if (!confirm(`Delete log "${title}"?`)) return;
     try {
       await deleteLog(id).unwrap();
-      setNotice({ type: "success", text: "Log deleted." });
+      notifySuccess("Log deleted.");
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Delete log failed"));
     }
   }
 
@@ -414,6 +396,36 @@ export default function LogsPage() {
     createLogForm.reset();
   }
 
+  function onOpenLogHistory(id: string) {
+    setHistoryLogId(id);
+  }
+
+  function onCloseLogHistory() {
+    setHistoryLogId(null);
+  }
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (historyLogId) {
+        setHistoryLogId(null);
+        return;
+      }
+      if (editingLogId) {
+        setEditingLogId(null);
+        editLogForm.reset();
+        return;
+      }
+      if (showCreateLogModal) {
+        setShowCreateLogModal(false);
+        createLogForm.reset();
+      }
+    };
+
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [createLogForm, editLogForm, editingLogId, historyLogId, showCreateLogModal]);
+
   async function onUpdateLog(values: {
     title: string;
     brandId: string;
@@ -447,10 +459,10 @@ export default function LogsPage() {
         actualRevenue: Number(values.actualRevenue),
         notes: values.notes.trim(),
       }).unwrap();
-      setNotice({ type: "success", text: "Log updated." });
+      notifySuccess("Log updated.");
       onCloseEditLog();
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Update log failed"));
     }
   }
 
@@ -476,6 +488,9 @@ export default function LogsPage() {
   }
 
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
+    ? ({ "--base-color": "#1e293b", "--highlight-color": "#334155" } as CSSProperties)
+    : undefined;
   const selectedBrand = brands.data?.find((b) => b.id === logBrandId);
   const selectedBrandContacts = contacts.data?.filter((c) => c.brandId === logBrandId) ?? [];
   const selectedBrandAssigneeName = selectedBrand?.owner?.name ?? "";
@@ -490,10 +505,9 @@ export default function LogsPage() {
   const brandOptions = (brands.data ?? []).map((b) => ({ id: b.id, label: b.name }));
   const createContactOptions = selectedBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
   const editContactOptions = selectedEditBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
-
   return (
     <AppShell isDarkTheme={isDarkTheme}>
-      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"}>
+      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"} style={skeletonThemeStyle}>
         <header className={isDarkTheme ? "border-b border-white/10 bg-slate-900 px-6 py-3 shadow-sm shadow-black/20" : "border-b bg-white px-6 py-3 shadow-sm"}>
           <div className="mx-auto flex max-w-7xl items-center justify-between">
             <div className="flex items-center gap-3">
@@ -519,41 +533,93 @@ export default function LogsPage() {
         </header>
 
         <div className="mx-auto max-w-7xl space-y-6 p-6">
-          {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
           <div className="grid gap-6">
             <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20" : undefined}>
               <CardHeader><CardTitle>Logs</CardTitle></CardHeader>
               <CardContent>
-                <div className="mb-4 flex justify-end">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="flex w-full items-center gap-2 md:max-w-xl">
+                    <Input
+                      value={searchInput}
+                      onChange={(e) => setSearchInput(e.target.value)}
+                      placeholder="Search logs by title, notes, brand, contact, assignee, status, priority, date, revenue..."
+                      className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                    />
+                    {searchInput ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setSearchInput("");
+                          setDebouncedSearchTerm("");
+                        }}
+                        className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined}
+                      >
+                        Clear
+                      </Button>
+                    ) : null}
+                  </div>
                   <Button className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined} onClick={onOpenCreateLogModal}>
                     Add Log
                   </Button>
                 </div>
-                <Table>
-                  <THead>
-                    <TR><TH>Title</TH><TH>Status</TH><TH>Priority</TH><TH>Brand</TH><TH>Assignee</TH><TH></TH></TR>
-                  </THead>
-                  <TBody>
-                    {logs.isLoading && <TableLoading cols={6} />}
-                    {logs.isError && <TableError cols={6} onRetry={() => logs.refetch()} />}
-                    {logs.data?.length === 0 && <TableEmpty cols={6} message="No logs yet." />}
-                    {logs.data?.map((l) => (
-                      <TR key={l.id}>
-                        <TD className="font-medium">{l.title}</TD>
-                        <TD><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${l.status === "CLOSED_WON" ? "bg-green-100 text-green-700" : l.status === "CLOSED_LOST" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>{statusLabel(l.status)}</span></TD>
-                        <TD><span className={`rounded px-1.5 py-0.5 text-xs font-medium ${l.priority === "HIGH" ? "bg-red-100 text-red-700" : l.priority === "MEDIUM" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>{l.priority}</span></TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{l.brand?.name ?? l.brandId}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{l.assignee?.name ?? l.assignedTo}</TD>
-                        <TD>
-                          <div className="flex items-center gap-3">
-                            <button onClick={() => onOpenEditLog(l.id)} className={isDarkTheme ? "text-xs text-cyan-300 hover:underline" : "text-xs text-blue-600 hover:underline"}>Edit</button>
-                            <button onClick={() => onDeleteLog(l.id, l.title)} className="text-xs text-red-500 hover:underline">Delete</button>
-                          </div>
-                        </TD>
-                      </TR>
+                <p className={isDarkTheme ? "mb-3 text-xs text-slate-400" : "mb-3 text-xs text-slate-500"}>
+                  Showing {filteredLogs.length} of {logs.data?.length ?? 0} logs
+                </p>
+                <p className={isDarkTheme ? "mb-4 rounded-md border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200" : "mb-4 rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs text-cyan-700"}>
+                  Use buttons on each log card to view revision history, edit, or delete directly from this page.
+                </p>
+                {logs.isLoading ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                      <div key={idx} className="rounded-xl border border-slate-200 p-4">
+                        <Skeleton height={16} width="60%" />
+                        <Skeleton height={12} count={5} className="mt-2" />
+                      </div>
                     ))}
-                  </TBody>
-                </Table>
+                  </div>
+                ) : null}
+                {logs.isError ? (
+                  <p className="py-4 text-center text-red-600">
+                    Failed to load.{" "}
+                    <button onClick={() => logs.refetch()} className="underline hover:opacity-70">
+                      Retry
+                    </button>
+                  </p>
+                ) : null}
+                {!logs.isLoading && !logs.isError && filteredLogs.length === 0 ? (
+                  <p className="py-4 text-center text-slate-400">
+                    {debouncedSearchTerm ? "No logs match your search." : "No logs yet."}
+                  </p>
+                ) : null}
+                {!logs.isLoading && !logs.isError && filteredLogs.length > 0 ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredLogs.map((l) => (
+                      <div
+                        key={l.id}
+                        className={isDarkTheme ? "rounded-xl border border-white/10 bg-slate-800/70 p-4 transition hover:-translate-y-0.5 hover:border-cyan-400/40 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/30" : "rounded-xl border border-slate-200 bg-white p-4 transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/20"}
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-2">
+                          <h4 className={isDarkTheme ? "text-sm font-semibold text-white" : "text-sm font-semibold text-slate-900"}>{l.title}</h4>
+                          <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${l.status === "CLOSED_WON" ? "bg-green-100 text-green-700" : l.status === "CLOSED_LOST" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"}`}>{statusLabel(l.status)}</span>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Priority:</strong> {statusLabel(l.priority)}</p>
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Brand:</strong> {l.brand?.name ?? l.brandId}</p>
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Contact:</strong> {l.contact?.name ?? l.contactId}</p>
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Assignee:</strong> {l.assignee?.name ?? l.assignedTo}</p>
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Revenue:</strong> {formatInrCurrency(l.actualRevenue, true)}</p>
+                          <p className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>{l.notes}</p>
+                        </div>
+                        <div className="mt-3 flex items-center gap-3">
+                          <button onClick={() => onOpenLogHistory(l.id)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-purple-300 transition hover:bg-purple-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-violet-600 transition hover:bg-violet-50 hover:underline"}>History</button>
+                          <button onClick={() => onOpenEditLog(l.id)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-cyan-300 transition hover:bg-cyan-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-blue-600 transition hover:bg-blue-50 hover:underline"}>Edit</button>
+                          <button onClick={() => void onDeleteLog(l.id, l.title)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-red-300 transition hover:bg-red-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-red-600 transition hover:bg-red-50 hover:underline"}>Delete</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>
@@ -648,7 +714,7 @@ export default function LogsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="logExpectedRevenue">Expected Revenue (View Only) *</Label>
-                  <Input id="logExpectedRevenue" value={Number.isFinite(selectedBrandExpectedRevenue) ? selectedBrandExpectedRevenue.toFixed(2) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <Input id="logExpectedRevenue" value={Number.isFinite(selectedBrandExpectedRevenue) ? formatInrCurrency(selectedBrandExpectedRevenue, true) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="logActualRevenue">Actual Revenue *</Label>
@@ -673,35 +739,21 @@ export default function LogsPage() {
 
         {editingLogId ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-            <div className={isDarkTheme ? "w-full max-w-xl rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50" : "w-full max-w-xl rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"}>
+            <div className={isDarkTheme ? "w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50" : "w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"}>
               <div className="mb-4 flex items-center justify-between">
                 <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>Edit Log</h3>
                 <button type="button" onClick={onCloseEditLog} className={isDarkTheme ? "text-slate-300 hover:text-white" : "text-slate-500 hover:text-slate-900"}>Close</button>
               </div>
               <form className="space-y-3" onSubmit={editLogForm.handleSubmit(onUpdateLog)} noValidate>
                 <div className="space-y-1">
-                  <Label htmlFor="editLogTitle">Title *</Label>
-                  <Input id="editLogTitle" {...editLogForm.register("title", { required: "Title is required" })} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined} />
-                  <FieldError msg={editLogForm.formState.errors.title?.message} />
+                  <Label htmlFor="editLogTitle">Title (Locked)</Label>
+                  <Input id="editLogTitle" readOnly {...editLogForm.register("title")} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <p className={isDarkTheme ? "text-xs text-slate-400" : "text-xs text-slate-500"}>Title cannot be changed after log creation.</p>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="editLogBrand">Brand *</Label>
-                  <Controller control={editLogForm.control} name="brandId" rules={{ required: "Select a brand" }} render={({ field }) => (
-                    <AutocompleteField
-                      id="editLogBrand"
-                      value={field.value}
-                      options={brandOptions}
-                      loading={brands.isLoading}
-                      placeholder="Search and select brand..."
-                      noResultsText="No brands found."
-                      isDarkTheme={isDarkTheme}
-                      onChange={(id) => {
-                        field.onChange(id);
-                        editLogForm.setValue("contactId", "");
-                      }}
-                    />
-                  )} />
-                  <FieldError msg={editLogForm.formState.errors.brandId?.message} />
+                  <Label htmlFor="editLogBrand">Brand (Locked)</Label>
+                  <Input id="editLogBrand" readOnly value={selectedEditBrand?.name ?? ""} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <p className={isDarkTheme ? "text-xs text-slate-400" : "text-xs text-slate-500"}>Brand cannot be changed after log creation.</p>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogStatus">Status *</Label>
@@ -755,7 +807,7 @@ export default function LogsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogExpectedRevenue">Expected Revenue (View Only) *</Label>
-                  <Input id="editLogExpectedRevenue" value={Number.isFinite(selectedEditBrandExpectedRevenue) ? selectedEditBrandExpectedRevenue.toFixed(2) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                  <Input id="editLogExpectedRevenue" value={Number.isFinite(selectedEditBrandExpectedRevenue) ? formatInrCurrency(selectedEditBrandExpectedRevenue, true) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogActualRevenue">Actual Revenue *</Label>
@@ -774,6 +826,74 @@ export default function LogsPage() {
                   </Button>
                 </div>
               </form>
+            </div>
+          </div>
+        ) : null}
+
+        {historyLogId ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div className={isDarkTheme ? "w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50" : "w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"}>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>Log Revision History</h3>
+                <button type="button" onClick={onCloseLogHistory} className={isDarkTheme ? "text-slate-300 hover:text-white" : "text-slate-500 hover:text-slate-900"}>Close</button>
+              </div>
+              {logRevisions.isLoading ? (
+                <div className="space-y-2">
+                  <Skeleton height={16} count={4} />
+                </div>
+              ) : null}
+              {logRevisions.isError ? (
+                <div className="space-y-2">
+                  <p className="text-sm text-red-500">Failed to load revision history.</p>
+                  <Button type="button" variant="outline" className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined} onClick={() => logRevisions.refetch()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
+              {!logRevisions.isLoading && !logRevisions.isError ? (
+                <div className="space-y-3">
+                  {logRevisions.data?.length ? (
+                    logRevisions.data.map((revision) => (
+                      <div
+                        key={revision.id}
+                        className={isDarkTheme ? "rounded-lg border border-white/10 bg-slate-800/80 p-3" : "rounded-lg border border-slate-200 bg-slate-50 p-3"}
+                      >
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className={isDarkTheme ? "rounded-full bg-cyan-500/20 px-2 py-0.5 text-xs font-medium text-cyan-200" : "rounded-full bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-700"}>
+                              {revision.revisionType === "CREATED" ? "Created" : "Updated"}
+                            </span>
+                            <span className={isDarkTheme ? "text-xs text-slate-300" : "text-xs text-slate-600"}>
+                              {formatDateDDMonYYYY(revision.changedAt)}
+                            </span>
+                          </div>
+                          <span className={isDarkTheme ? "text-xs text-slate-400" : "text-xs text-slate-500"}>
+                            By {revision.changedByUser?.name ?? revision.changedBy}
+                          </span>
+                        </div>
+                        <div className={isDarkTheme ? "grid gap-2 text-xs text-slate-200 sm:grid-cols-2" : "grid gap-2 text-xs text-slate-700 sm:grid-cols-2"}>
+                          <p><strong>Title:</strong> {revision.title}</p>
+                          <p><strong>Status:</strong> {statusLabel(revision.status)}</p>
+                          <p><strong>Priority:</strong> {statusLabel(revision.priority)}</p>
+                          <p><strong>Brand:</strong> {revision.brand?.name ?? revision.brandId}</p>
+                          <p><strong>Contact:</strong> {revision.contact?.name ?? revision.contactId}</p>
+                          <p><strong>Assigned To:</strong> {revision.assignee?.name ?? revision.assignedTo}</p>
+                          <p><strong>Last Contact:</strong> {formatDateDDMonYYYY(revision.lastContactDate)}</p>
+                          <p><strong>Follow Up:</strong> {formatDateDDMonYYYY(revision.followUpDate)}</p>
+                          <p><strong>Meeting:</strong> {formatDateDDMonYYYY(revision.meetingDate)}</p>
+                          <p><strong>Actual Revenue:</strong> {formatInrCurrency(revision.actualRevenue, true)}</p>
+                        </div>
+                        <div className="mt-2">
+                          <p className={isDarkTheme ? "text-xs font-semibold text-slate-200" : "text-xs font-semibold text-slate-700"}>Notes</p>
+                          <p className={isDarkTheme ? "mt-1 whitespace-pre-wrap text-xs text-slate-300" : "mt-1 whitespace-pre-wrap text-xs text-slate-600"}>{revision.notes}</p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className={isDarkTheme ? "text-sm text-slate-400" : "text-sm text-slate-500"}>No revisions found for this log.</p>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

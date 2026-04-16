@@ -1,15 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import Image from "next/image";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
+import Skeleton from "react-loading-skeleton";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getErrorMessage } from "@/lib/error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AppShell } from "@/components/layout/app-shell";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { persistToken } from "@/store/provider";
 import {
   useDisable2FAMutation,
@@ -19,20 +23,8 @@ import {
 } from "@/store/services/api";
 import type { RootState } from "@/store";
 
-type Notice = { type: "success" | "error"; text: string };
-
-function getErrorMessage(error: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
-  if (!error || typeof error !== "object") return fallback;
-  const e = error as { data?: { message?: string }; error?: string; status?: number };
-  if (e.data?.message) return e.data.message;
-  if (e.error) return e.error;
-  if (e.status) return `Request failed with status ${e.status}.`;
-  return fallback;
-}
-
 function roleLabel(role: string) {
-  const map: Record<string, string> = { BOSS: "Boss", EMPLOYEE: "Employee", INTERN: "Intern" };
+  const map: Record<string, string> = { BOSS: "Boss", MANAGER: "Manager", EMPLOYEE: "Employee", INTERN: "Intern" };
   return map[role] ?? role;
 }
 
@@ -45,28 +37,10 @@ function extractSecretFromOtpAuth(otpauthUrl: string): string {
   }
 }
 
-function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
-  return (
-    <div
-      className={`flex items-center justify-between rounded-md border px-4 py-2 text-sm ${
-        notice.type === "success"
-          ? "border-green-300 bg-green-50 text-green-800"
-          : "border-red-300 bg-red-50 text-red-800"
-      }`}
-    >
-      <span>{notice.text}</span>
-      <button onClick={onDismiss} className="ml-4 font-bold opacity-60 hover:opacity-100">
-        ×
-      </button>
-    </div>
-  );
-}
-
 export default function SettingsPage() {
   const token = useSelector((state: RootState) => state.auth.token);
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState("");
   const [otpauthUrl, setOtpauthUrl] = useState("");
   const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
@@ -97,7 +71,8 @@ export default function SettingsPage() {
   function onThemeChange(value: "light" | "dark" | "system") {
     setThemeMode(value);
     window.localStorage.setItem("venta-dashboard-theme", value);
-    setNotice({ type: "success", text: "Theme preference saved." });
+    window.dispatchEvent(new CustomEvent("venta-theme-change", { detail: value }));
+    notifySuccess("Theme preference saved.");
   }
 
   async function onStart2FASetup() {
@@ -106,42 +81,42 @@ export default function SettingsPage() {
       setQrCodeDataUrl(response.qrCodeDataUrl);
       setOtpauthUrl(response.otpauthUrl);
       setupOtpForm.reset({ token: "" });
-      setNotice({ type: "success", text: "2FA setup started. Scan the QR and verify code." });
+      notifySuccess("2FA setup started. Scan the QR and verify code.");
       await me.refetch();
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Start 2FA setup failed"));
     }
   }
 
   async function onVerify2FASetup(values: { token: string }) {
     if (!values.token.trim()) {
-      setNotice({ type: "error", text: "Please enter the authenticator code." });
+      notifyError("Please enter the authenticator code.");
       return;
     }
     try {
       const result = await verifySetup2FA({ token: values.token.trim() }).unwrap();
-      setNotice({ type: "success", text: result.message || "2FA enabled successfully." });
+      notifySuccess(result.message || "2FA enabled successfully.");
       setQrCodeDataUrl("");
       setOtpauthUrl("");
       setupOtpForm.reset({ token: "" });
       await me.refetch();
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Verify 2FA setup failed"));
     }
   }
 
   async function onDisable2FA(values: { token: string }) {
     if (!values.token.trim()) {
-      setNotice({ type: "error", text: "Please enter your authenticator code." });
+      notifyError("Please enter your authenticator code.");
       return;
     }
     try {
       const result = await disable2FA({ token: values.token.trim() }).unwrap();
-      setNotice({ type: "success", text: result.message || "2FA disabled successfully." });
+      notifySuccess(result.message || "2FA disabled successfully.");
       disableOtpForm.reset({ token: "" });
       await me.refetch();
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Disable 2FA failed"));
     }
   }
 
@@ -174,10 +149,13 @@ export default function SettingsPage() {
   }
 
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
+    ? ({ "--base-color": "#1e293b", "--highlight-color": "#334155" } as CSSProperties)
+    : undefined;
 
   return (
     <AppShell isDarkTheme={isDarkTheme}>
-      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"}>
+      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"} style={skeletonThemeStyle}>
       <header className={isDarkTheme ? "border-b border-white/10 bg-slate-900 px-6 py-3 shadow-sm shadow-black/20" : "border-b bg-white px-6 py-3 shadow-sm"}>
         <div className="mx-auto flex max-w-7xl items-center justify-between">
           <div className="flex items-center gap-3">
@@ -236,8 +214,6 @@ export default function SettingsPage() {
         </aside>
 
         <section className="space-y-6">
-          {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-
           <Card id="user-settings" className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20" : undefined}>
             <CardHeader>
               <CardTitle>User Settings</CardTitle>
@@ -250,21 +226,27 @@ export default function SettingsPage() {
                 <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/70 p-4" : "rounded-md border border-slate-200 bg-slate-50 p-4"}>
                   <p className={isDarkTheme ? "text-xs font-semibold uppercase tracking-wide text-slate-400" : "text-xs font-semibold uppercase tracking-wide text-slate-500"}>Profile</p>
                   <div className={isDarkTheme ? "mt-2 space-y-1 text-sm text-slate-200" : "mt-2 space-y-1 text-sm text-slate-700"}>
-                    <p>
-                      <span className="font-medium">Name:</span> {me.data?.name ?? "—"}
-                    </p>
-                    <p>
-                      <span className="font-medium">Email:</span> {me.data?.email ?? "—"}
-                    </p>
-                    <p>
-                      <span className="font-medium">Role:</span> {me.data ? roleLabel(me.data.role) : "—"}
-                    </p>
-                    <p>
-                      <span className="font-medium">Department:</span> {me.data?.department ?? "—"}
-                    </p>
-                    <p>
-                      <span className="font-medium">Position:</span> {me.data?.position ?? "—"}
-                    </p>
+                    {me.isLoading ? (
+                      <Skeleton height={14} count={5} />
+                    ) : (
+                      <>
+                        <p>
+                          <span className="font-medium">Name:</span> {me.data?.name ?? "—"}
+                        </p>
+                        <p>
+                          <span className="font-medium">Email:</span> {me.data?.email ?? "—"}
+                        </p>
+                        <p>
+                          <span className="font-medium">Role:</span> {me.data ? roleLabel(me.data.role) : "—"}
+                        </p>
+                        <p>
+                          <span className="font-medium">Department:</span> {me.data?.department ?? "—"}
+                        </p>
+                        <p>
+                          <span className="font-medium">Position:</span> {me.data?.position ?? "—"}
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/70 p-4" : "rounded-md border border-slate-200 bg-slate-50 p-4"}>
@@ -305,7 +287,14 @@ export default function SettingsPage() {
                 <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/70 p-4" : "rounded-md border border-slate-200 bg-slate-50 p-4"}>
                   <p className={isDarkTheme ? "text-sm font-medium text-white" : "text-sm font-medium text-slate-900"}>Enable Google Authenticator</p>
                   <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-center">
-                    <img src={qrCodeDataUrl} alt="QR code for 2FA setup" className={isDarkTheme ? "h-40 w-40 rounded border border-slate-700 bg-white p-2" : "h-40 w-40 rounded border border-slate-300 bg-white p-2"} />
+                    <Image
+                      src={qrCodeDataUrl}
+                      alt="QR code for 2FA setup"
+                      width={160}
+                      height={160}
+                      unoptimized
+                      className={isDarkTheme ? "h-40 w-40 rounded border border-slate-700 bg-white p-2" : "h-40 w-40 rounded border border-slate-300 bg-white p-2"}
+                    />
                     <form className="w-full max-w-sm space-y-2" onSubmit={setupOtpForm.handleSubmit(onVerify2FASetup)}>
                       <Label htmlFor="setupOtp">Authenticator code</Label>
                       <Input

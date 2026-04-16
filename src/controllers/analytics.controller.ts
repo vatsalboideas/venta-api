@@ -33,10 +33,10 @@ export async function getRevenueTrend(req: Request, res: Response, next: NextFun
 
     const rows = await prisma.$queryRaw<RevenueTrendRow[]>`
       SELECT
-        date_trunc(${bucket}, l.created_at) AS bucket,
-        COALESCE(SUM(l.actual_revenue), 0) AS revenue
+        date_trunc(${bucket}, l."createdAt") AS bucket,
+        COALESCE(SUM(l."actual_revenue"), 0) AS revenue
       FROM logs l
-      WHERE l.actual_revenue IS NOT NULL
+      WHERE l."actual_revenue" IS NOT NULL
       GROUP BY 1
       ORDER BY 1 ASC
     `;
@@ -79,10 +79,10 @@ export async function getLeaderboard(_req: Request, res: Response, next: NextFun
       SELECT
         u.id AS user_id,
         u.name AS user_name,
-        COALESCE(SUM(l.actual_revenue), 0) AS total_revenue,
-        DENSE_RANK() OVER (ORDER BY COALESCE(SUM(l.actual_revenue), 0) DESC) AS rank
+        COALESCE(SUM(l."actual_revenue"), 0) AS total_revenue,
+        DENSE_RANK() OVER (ORDER BY COALESCE(SUM(l."actual_revenue"), 0) DESC) AS rank
       FROM users u
-      LEFT JOIN logs l ON l.assigned_to = u.id
+      LEFT JOIN logs l ON l."assigned_to" = u.id
       GROUP BY u.id, u.name
       ORDER BY total_revenue DESC
     `;

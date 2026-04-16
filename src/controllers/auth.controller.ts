@@ -18,7 +18,7 @@ import {
 } from "../utils/validate";
 
 const ALLOWED_SELF_ROLES: Role[] = [Role.EMPLOYEE, Role.INTERN];
-const MANAGEABLE_ROLES: Role[] = [Role.EMPLOYEE, Role.INTERN];
+const MANAGEABLE_ROLES: Role[] = [Role.MANAGER, Role.EMPLOYEE, Role.INTERN];
 
 function optionalString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
@@ -244,9 +244,29 @@ export async function disableGoogleAuthenticator(req: Request, res: Response, ne
 
 export async function listUsers(req: Request, res: Response, next: NextFunction) {
   try {
-    const createdByMe = req.query.createdByMe === "1" || req.query.createdByMe === "true";
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const rawPage = typeof req.query.page === "string" ? Number(req.query.page) : NaN;
+    const rawLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : undefined;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 100) : undefined;
+
+    const where = {
+      role: { in: MANAGEABLE_ROLES },
+      ...(q
+        ? {
+            OR: [
+              { name: { contains: q, mode: "insensitive" as const } },
+              { email: { contains: q, mode: "insensitive" as const } },
+              { department: { contains: q, mode: "insensitive" as const } },
+              { position: { contains: q, mode: "insensitive" as const } },
+              { creator: { name: { contains: q, mode: "insensitive" as const } } },
+            ],
+          }
+        : {}),
+    };
+
     const users = await prisma.user.findMany({
-      where: createdByMe ? { createdBy: req.user!.id } : { role: { in: MANAGEABLE_ROLES } },
+      where,
       select: {
         id: true,
         name: true,
@@ -263,6 +283,8 @@ export async function listUsers(req: Request, res: Response, next: NextFunction)
         updatedAt: true,
       },
       orderBy: { createdAt: "desc" },
+      skip: page && limit ? (page - 1) * limit : undefined,
+      take: limit,
     });
     return res.json(users);
   } catch (err) {

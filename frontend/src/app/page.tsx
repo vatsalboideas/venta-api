@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
 import Link from "next/link";
+import Skeleton from "react-loading-skeleton";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AppShell } from "@/components/layout/app-shell";
+import { formatInrCurrency } from "@/lib/currency";
+import { getErrorMessage } from "@/lib/error";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { persistToken } from "@/store/provider";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import {
   useConversionRateQuery,
   useDeleteBrandMutation,
@@ -28,21 +32,10 @@ import type { RootState } from "@/store";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-type Notice = { type: "success" | "error"; text: string };
 type ThemeMode = "light" | "dark" | "system";
 
-function getErrorMessage(error: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
-  if (!error || typeof error !== "object") return fallback;
-  const e = error as { data?: { message?: string }; error?: string; status?: number };
-  if (e.data?.message) return e.data.message;
-  if (e.error) return e.error;
-  if (e.status) return `Request failed with status ${e.status}.`;
-  return fallback;
-}
-
 function roleLabel(role: string) {
-  const map: Record<string, string> = { BOSS: "Boss", EMPLOYEE: "Employee", INTERN: "Intern" };
+  const map: Record<string, string> = { BOSS: "Boss", MANAGER: "Manager", EMPLOYEE: "Employee", INTERN: "Intern" };
   return map[role] ?? role;
 }
 
@@ -50,38 +43,21 @@ function statusLabel(s: string) {
   return s.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ── Notice banner with auto-dismiss ──────────────────────────────────────────
-
-function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    timerRef.current = setTimeout(onDismiss, 4000);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [notice, onDismiss]);
-
-  return (
-    <div
-      className={`flex items-center justify-between rounded-md border px-4 py-2 text-sm ${
-        notice.type === "success"
-          ? "border-green-300 bg-green-50 text-green-800"
-          : "border-red-300 bg-red-50 text-red-800"
-      }`}
-    >
-      <span>{notice.text}</span>
-      <button onClick={onDismiss} className="ml-4 font-bold opacity-60 hover:opacity-100">×</button>
-    </div>
-  );
-}
-
 // ── Table state rows ──────────────────────────────────────────────────────────
 
 function TableLoading({ cols }: { cols: number }) {
   return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-slate-400">
-        Loading…
-      </TD>
-    </TR>
+    <>
+      {Array.from({ length: 4 }).map((_, rowIdx) => (
+        <TR key={rowIdx}>
+          {Array.from({ length: cols }).map((__, colIdx) => (
+            <TD key={`${rowIdx}-${colIdx}`} className="py-3">
+              <Skeleton height={14} />
+            </TD>
+          ))}
+        </TR>
+      ))}
+    </>
   );
 }
 
@@ -124,7 +100,6 @@ function FieldError({ msg }: { msg?: string }) {
 function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [tempToken, setTempToken] = useState("");
-  const [notice, setNotice] = useState<Notice | null>(null);
   const loginForm = useForm<{ email: string; password: string }>({ defaultValues: { email: "", password: "" } });
   const otpForm = useForm<{ otp: string }>({ defaultValues: { otp: "" } });
 
@@ -139,14 +114,14 @@ function AuthPage() {
       const response = await login({ email: values.email, password: values.password }).unwrap();
       if (response.requiresTwoFactor) {
         setTempToken(response.tempToken);
-        setNotice({ type: "success", text: "Password verified. Enter your 2FA code." });
+        notifySuccess("Password verified. Enter your 2FA code.");
         return;
       }
       persistToken(response.accessToken);
     } catch (error) {
       setTempToken("");
       otpForm.reset({ otp: "" });
-      setNotice({ type: "error", text: getErrorMessage(error) });
+      notifyError(getErrorMessage(error, "Login failed"));
     }
   }
 
@@ -156,7 +131,7 @@ function AuthPage() {
       const response = await verify2FA({ tempToken, token: values.otp }).unwrap();
       persistToken(response.accessToken);
     } catch (error) {
-      setNotice({ type: "error", text: getErrorMessage(error) });
+      notifyError(getErrorMessage(error, "2FA verification failed"));
     }
   }
 
@@ -187,8 +162,6 @@ function AuthPage() {
             <p className="text-sm text-slate-300">Enter your credentials to continue.</p>
           </CardHeader>
           <CardContent className="space-y-4 pt-5">
-            {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-
             <form className="space-y-4" onSubmit={loginForm.handleSubmit(onLogin)} noValidate>
               <div className="space-y-1.5">
                 <Label htmlFor="email" className="text-slate-200">Email</Label>
@@ -260,7 +233,6 @@ function AuthPage() {
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
 function Dashboard() {
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") return "system";
     const stored = window.localStorage.getItem("venta-dashboard-theme");
@@ -281,17 +253,13 @@ function Dashboard() {
   // ── Mutations
   const [deleteBrand] = useDeleteBrandMutation();
   const [deleteLog] = useDeleteLogMutation();
-  function setNoticeAuto(n: Notice) {
-    setNotice(n);
-  }
-
   async function onDeleteBrand(id: string, name: string) {
     if (!confirm(`Delete brand "${name}"? This will also delete related contacts and logs.`)) return;
     try {
       await deleteBrand(id).unwrap();
-      setNoticeAuto({ type: "success", text: "Brand deleted." });
+      notifySuccess("Brand deleted.");
     } catch (err) {
-      setNoticeAuto({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Delete brand failed"));
     }
   }
 
@@ -299,14 +267,17 @@ function Dashboard() {
     if (!confirm(`Delete log "${title}"?`)) return;
     try {
       await deleteLog(id).unwrap();
-      setNoticeAuto({ type: "success", text: "Log deleted." });
+      notifySuccess("Log deleted.");
     } catch (err) {
-      setNoticeAuto({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Delete log failed"));
     }
   }
 
   const totalRevenue = leaderboard.data?.reduce((s, r) => s + r.totalRevenue, 0) ?? 0;
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
+    ? ({ "--base-color": "#1e293b", "--highlight-color": "#334155" } as CSSProperties)
+    : undefined;
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -322,16 +293,23 @@ function Dashboard() {
   function onThemeChange(value: ThemeMode) {
     setThemeMode(value);
     window.localStorage.setItem("venta-dashboard-theme", value);
+    window.dispatchEvent(new CustomEvent<ThemeMode>("venta-theme-change", { detail: value }));
   }
 
   return (
     <AppShell isDarkTheme={isDarkTheme}>
-      <main className={isDarkTheme ? "dashboard-dark min-h-screen bg-slate-950 text-slate-100" : "dashboard-light min-h-screen bg-slate-100"}>
+      <main
+        className={isDarkTheme ? "dashboard-dark min-h-screen bg-slate-950 text-slate-100" : "dashboard-light min-h-screen bg-slate-100"}
+        style={skeletonThemeStyle}
+      >
       {/* ── Header ── */}
       <header className={isDarkTheme ? "border-b border-white/10 bg-slate-900 px-6 py-3 shadow-sm shadow-black/20" : "border-b bg-white px-6 py-3 shadow-sm"}>
         <div className="mx-auto flex max-w-7xl items-center justify-between">
           <div className="flex items-center gap-3">
             <span className={isDarkTheme ? "text-lg font-bold text-white" : "text-lg font-bold text-slate-900"}>Venta</span>
+            {me.isLoading ? (
+              <Skeleton width={180} height={20} />
+            ) : null}
             {me.data && (
               <>
                 <span className={isDarkTheme ? "text-slate-500" : "text-slate-400"}>|</span>
@@ -339,6 +317,8 @@ function Dashboard() {
                 <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                   me.data.role === "BOSS"
                     ? isDarkTheme ? "bg-amber-500/20 text-amber-300" : "bg-amber-100 text-amber-800"
+                    : me.data.role === "MANAGER"
+                    ? isDarkTheme ? "bg-violet-500/20 text-violet-300" : "bg-violet-100 text-violet-800"
                     : me.data.role === "EMPLOYEE"
                     ? isDarkTheme ? "bg-blue-500/20 text-blue-300" : "bg-blue-100 text-blue-800"
                     : isDarkTheme ? "bg-slate-700 text-slate-200" : "bg-slate-100 text-slate-700"
@@ -381,16 +361,13 @@ function Dashboard() {
       </header>
 
       <div className="mx-auto max-w-7xl space-y-6 p-6">
-        {/* Global notice */}
-        {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-
         {/* ── KPI Row ── */}
         <section className="grid gap-4 sm:grid-cols-3">
           <Card>
             <CardContent className="flex flex-col gap-1 pt-5">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Conversion Rate</span>
               <span className="text-3xl font-bold text-slate-900">
-                {conversion.isLoading ? "–" : `${(conversion.data?.conversionRatePercent ?? 0).toFixed(1)}%`}
+                {conversion.isLoading ? <Skeleton width={90} height={36} /> : `${(conversion.data?.conversionRatePercent ?? 0).toFixed(1)}%`}
               </span>
               <span className="text-xs text-slate-400">
                 {conversion.data ? `${conversion.data.closedWonLogs} / ${conversion.data.totalLogs} closed won` : ""}
@@ -401,7 +378,7 @@ function Dashboard() {
             <CardContent className="flex flex-col gap-1 pt-5">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Total Revenue</span>
               <span className="text-3xl font-bold text-slate-900">
-                {leaderboard.isLoading ? "–" : `$${totalRevenue.toLocaleString()}`}
+                {leaderboard.isLoading ? <Skeleton width={130} height={36} /> : formatInrCurrency(totalRevenue)}
               </span>
               <span className="text-xs text-slate-400">sum of all closed revenue</span>
             </CardContent>
@@ -410,7 +387,7 @@ function Dashboard() {
             <CardContent className="flex flex-col gap-1 pt-5">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Revenue Buckets</span>
               <span className="text-3xl font-bold text-slate-900">
-                {trend.isLoading ? "–" : (trend.data?.length ?? 0)}
+                {trend.isLoading ? <Skeleton width={70} height={36} /> : (trend.data?.length ?? 0)}
               </span>
               <span className="text-xs text-slate-400">monthly data points</span>
             </CardContent>
@@ -455,7 +432,7 @@ function Dashboard() {
                         }`}>{b.priority}</span>
                       </TD>
                       <TD className="text-slate-500">{b.industry ?? "–"}</TD>
-                      <TD>${Number(b.expectedRevenue).toLocaleString()}</TD>
+                      <TD>{formatInrCurrency(b.expectedRevenue)}</TD>
                       <TD className="text-slate-500">{b.owner?.name ?? b.ownerId}</TD>
                       <TD>
                         <button
@@ -559,7 +536,7 @@ function Dashboard() {
                       }`}>{r.rank}</span>
                     </TD>
                     <TD className="font-medium">{r.userName}</TD>
-                    <TD>${r.totalRevenue.toLocaleString()}</TD>
+                    <TD>{formatInrCurrency(r.totalRevenue)}</TD>
                   </TR>
                 ))}
               </TBody>

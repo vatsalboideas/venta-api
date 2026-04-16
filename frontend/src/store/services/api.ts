@@ -13,9 +13,11 @@ import type {
   CreateContactRequest,
   CreateLogRequest,
   Disable2FARequest,
+  GlobalSearchResponse,
   LeaderboardItem,
   LoginResponse,
   LogItem,
+  LogRevision,
   RegisterRequest,
   RegisterResponse,
   RevenueTrendItem,
@@ -60,6 +62,18 @@ const rawBaseQuery = fetchBaseQuery({
   },
 });
 
+async function maybeDecryptErrorPayload(error: { data?: unknown }) {
+  const encrypted = error.data as { payload?: string } | undefined;
+  if (!encrypted?.payload) return;
+
+  try {
+    error.data = await decryptPayload(encrypted.payload, clientSecret);
+  } catch (decryptError) {
+    // Keep original payload if decrypt fails, but add trace detail for debugging.
+    console.warn("[API Error] Failed to decrypt error payload", { decryptError });
+  }
+}
+
 export const api = createApi({
   reducerPath: "api",
   baseQuery: async (args, apiStore, extraOptions) => {
@@ -70,6 +84,7 @@ export const api = createApi({
     }
     const result = await rawBaseQuery(request, apiStore, extraOptions);
     if (result.error) {
+      await maybeDecryptErrorPayload(result.error as { data?: unknown });
       const status = result.error.status;
       if ((status === 401 || status === 403) && currentToken && shouldAutoLogout(request.url)) {
         logoutAndRedirect(apiStore);
@@ -109,8 +124,16 @@ export const api = createApi({
       query: (body) => ({ url: "/auth/2fa/disable", method: "POST", body }),
       invalidatesTags: ["Me"],
     }),
-    listUsers: builder.query<User[], { createdByMe?: boolean } | void>({
-      query: (params) => `/auth/users${params?.createdByMe ? "?createdByMe=true" : ""}`,
+    listUsers: builder.query<User[], { q?: string; page?: number; limit?: number } | void>({
+      query: (params) => {
+        const query = new URLSearchParams();
+        const q = params?.q?.trim();
+        if (q) query.set("q", q);
+        if (params?.page && params.page > 0) query.set("page", String(params.page));
+        if (params?.limit && params.limit > 0) query.set("limit", String(params.limit));
+        const qs = query.toString();
+        return qs ? `/auth/users?${qs}` : "/auth/users";
+      },
       providesTags: ["Employees"],
     }),
     createIntern: builder.mutation<User, CreateInternRequest>({
@@ -119,8 +142,12 @@ export const api = createApi({
     }),
 
     // ── Brands ──────────────────────────────────────────────────────────────
-    listBrands: builder.query<Brand[], void>({
-      query: () => "/brands",
+    listBrands: builder.query<Brand[], { q?: string } | void>({
+      query: (params) => {
+        const search = params?.q?.trim();
+        if (!search) return "/brands";
+        return `/brands?q=${encodeURIComponent(search)}`;
+      },
       providesTags: ["Brands"],
     }),
     getBrand: builder.query<Brand, string>({
@@ -141,8 +168,23 @@ export const api = createApi({
     }),
 
     // ── Contacts ────────────────────────────────────────────────────────────
-    listContacts: builder.query<Contact[], void>({
-      query: () => "/contacts",
+    listContacts: builder.query<Contact[], {
+      brandId?: string;
+      q?: string;
+      page?: number;
+      limit?: number;
+    } | void>({
+      query: (params) => {
+        const query = new URLSearchParams();
+        const brandId = params?.brandId?.trim();
+        const q = params?.q?.trim();
+        if (brandId) query.set("brandId", brandId);
+        if (q) query.set("q", q);
+        if (params?.page && params.page > 0) query.set("page", String(params.page));
+        if (params?.limit && params.limit > 0) query.set("limit", String(params.limit));
+        const qs = query.toString();
+        return qs ? `/contacts?${qs}` : "/contacts";
+      },
       providesTags: ["Contacts"],
     }),
     getContact: builder.query<Contact, string>({
@@ -163,12 +205,42 @@ export const api = createApi({
     }),
 
     // ── Logs ────────────────────────────────────────────────────────────────
-    listLogs: builder.query<LogItem[], void>({
-      query: () => "/logs",
+    listLogs: builder.query<LogItem[], {
+      brandId?: string;
+      q?: string;
+      fromDate?: string;
+      toDate?: string;
+      dateField?: "createdAt" | "lastContactDate" | "followUpDate" | "meetingDate" | "all";
+      sort?: "latest" | "oldest";
+      page?: number;
+      limit?: number;
+    } | void>({
+      query: (params) => {
+        const query = new URLSearchParams();
+        const brandId = params?.brandId?.trim();
+        const q = params?.q?.trim();
+        const fromDate = params?.fromDate?.trim();
+        const toDate = params?.toDate?.trim();
+        const dateField = params?.dateField?.trim();
+        if (brandId) query.set("brandId", brandId);
+        if (q) query.set("q", q);
+        if (fromDate) query.set("fromDate", fromDate);
+        if (toDate) query.set("toDate", toDate);
+        if (dateField) query.set("dateField", dateField);
+        if (params?.sort) query.set("sort", params.sort);
+        if (params?.page && params.page > 0) query.set("page", String(params.page));
+        if (params?.limit && params.limit > 0) query.set("limit", String(params.limit));
+        const qs = query.toString();
+        return qs ? `/logs?${qs}` : "/logs";
+      },
       providesTags: ["Logs"],
     }),
     getLog: builder.query<LogItem, string>({
       query: (id) => `/logs/${id}`,
+      providesTags: (_result, _err, id) => [{ type: "Logs", id }],
+    }),
+    getLogRevisions: builder.query<LogRevision[], string>({
+      query: (id) => `/logs/${id}/revisions`,
       providesTags: (_result, _err, id) => [{ type: "Logs", id }],
     }),
     createLog: builder.mutation<LogItem, CreateLogRequest>({
@@ -193,6 +265,14 @@ export const api = createApi({
     }),
     leaderboard: builder.query<LeaderboardItem[], void>({
       query: () => "/analytics/logs/leaderboard",
+    }),
+    globalSearch: builder.query<GlobalSearchResponse, { q: string; limit?: number }>({
+      query: ({ q, limit }) => {
+        const query = new URLSearchParams();
+        query.set("q", q.trim());
+        if (limit && limit > 0) query.set("limit", String(limit));
+        return `/search?${query.toString()}`;
+      },
     }),
   }),
 });
@@ -219,10 +299,12 @@ export const {
   useDeleteContactMutation,
   useListLogsQuery,
   useGetLogQuery,
+  useGetLogRevisionsQuery,
   useCreateLogMutation,
   useUpdateLogMutation,
   useDeleteLogMutation,
   useRevenueTrendQuery,
   useConversionRateQuery,
+  useGlobalSearchQuery,
   useLeaderboardQuery,
 } = api;

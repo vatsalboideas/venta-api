@@ -276,6 +276,28 @@ export const openApiSpec: OpenAPIV3.Document = {
           rank: { type: "number" },
         },
       },
+      GlobalSearchResponse: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          users: {
+            type: "array",
+            items: { $ref: "#/components/schemas/AuthUser" },
+          },
+          brands: {
+            type: "array",
+            items: { $ref: "#/components/schemas/Brand" },
+          },
+          contacts: {
+            type: "array",
+            items: { $ref: "#/components/schemas/Contact" },
+          },
+          logs: {
+            type: "array",
+            items: { $ref: "#/components/schemas/Log" },
+          },
+        },
+      },
     },
   },
   security: [{ BearerAuth: [] }, { UserIdHeader: [], UserRoleHeader: [] }],
@@ -588,6 +610,36 @@ export const openApiSpec: OpenAPIV3.Document = {
         summary: "Delete log (BOSS or assigned user)",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "204": { description: "Deleted" }, "401": { description: "Unauthorized" }, "403": { description: "Forbidden" }, "404": { description: "Not found" } },
+      },
+    },
+    "/search": {
+      get: {
+        summary: "Global search across users, brands, contacts and logs",
+        parameters: [
+          {
+            name: "q",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "number", minimum: 1, maximum: 25, default: 8 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Global search results grouped by entity",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/GlobalSearchResponse" },
+              },
+            },
+          },
+          "401": { description: "Unauthorized" },
+        },
       },
     },
     "/analytics/logs/revenue-trend": {

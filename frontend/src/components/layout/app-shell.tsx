@@ -75,6 +75,9 @@ export function AppShell({ children, isDarkTheme = false }: AppShellProps) {
             <Link href="/logs" className={pathname === "/logs" ? activeItem : baseItem}>
               {collapsed ? "L" : "Logs"}
             </Link>
+            <Link href="/calendar" className={pathname === "/calendar" ? activeItem : baseItem}>
+              {collapsed ? "Ca" : "Calendar"}
+            </Link>
           </nav>
 
           <div className="mt-auto px-3 pb-4">

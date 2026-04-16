@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useSelector } from "react-redux";
+import Skeleton from "react-loading-skeleton";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { formatInrCurrency } from "@/lib/currency";
+import { getErrorMessage } from "@/lib/error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { persistToken } from "@/store/provider";
 import {
   useCreateBrandMutation,
@@ -23,73 +26,9 @@ import type { RootState } from "@/store";
 import type { ForecastCategory, Priority } from "@/types/api";
 import { FORECAST_CATEGORIES, PRIORITIES } from "@/types/api";
 
-type Notice = { type: "success" | "error"; text: string };
-
-function getErrorMessage(error: unknown): string {
-  const fallback = "Something went wrong. Please try again.";
-  if (!error || typeof error !== "object") return fallback;
-  const e = error as { data?: { message?: string }; error?: string; status?: number };
-  if (e.data?.message) return e.data.message;
-  if (e.error) return e.error;
-  if (e.status) return `Request failed with status ${e.status}.`;
-  return fallback;
-}
-
-function NoticeBanner({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }) {
-  return (
-    <div
-      className={`flex items-center justify-between rounded-md border px-4 py-2 text-sm ${
-        notice.type === "success"
-          ? "border-green-300 bg-green-50 text-green-800"
-          : "border-red-300 bg-red-50 text-red-800"
-      }`}
-    >
-      <span>{notice.text}</span>
-      <button onClick={onDismiss} className="ml-4 font-bold opacity-60 hover:opacity-100">
-        x
-      </button>
-    </div>
-  );
-}
-
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
   return <p className="mt-1 text-xs text-red-600">{msg}</p>;
-}
-
-function TableLoading({ cols }: { cols: number }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-slate-400">
-        Loading...
-      </TD>
-    </TR>
-  );
-}
-
-function TableError({ cols, onRetry }: { cols: number; onRetry?: () => void }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-red-600">
-        Failed to load.{" "}
-        {onRetry && (
-          <button onClick={onRetry} className="underline hover:opacity-70">
-            Retry
-          </button>
-        )}
-      </TD>
-    </TR>
-  );
-}
-
-function TableEmpty({ cols, message = "No records yet." }: { cols: number; message?: string }) {
-  return (
-    <TR>
-      <TD colSpan={cols} className="py-4 text-center text-slate-400">
-        {message}
-      </TD>
-    </TR>
-  );
 }
 
 function Select<T extends string>({
@@ -121,7 +60,6 @@ export default function BrandsPage() {
   const token = useSelector((state: RootState) => state.auth.token);
   const initialized = useSelector((state: RootState) => state.auth.initialized);
 
-  const [notice, setNotice] = useState<Notice | null>(null);
   const [themeMode, setThemeMode] = useState<"light" | "dark" | "system">(() => {
     if (typeof window === "undefined") return "system";
     const stored = window.localStorage.getItem("venta-dashboard-theme");
@@ -132,6 +70,8 @@ export default function BrandsPage() {
   );
 
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+  const [brandSearchInput, setBrandSearchInput] = useState("");
+  const [debouncedBrandSearch, setDebouncedBrandSearch] = useState("");
   const [useExistingContacts, setUseExistingContacts] = useState(true);
   const [showCreateBrandModal, setShowCreateBrandModal] = useState(false);
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
@@ -177,7 +117,10 @@ export default function BrandsPage() {
     },
   });
 
-  const brands = useListBrandsQuery(undefined, { skip: !token });
+  const brands = useListBrandsQuery(
+    debouncedBrandSearch ? { q: debouncedBrandSearch } : undefined,
+    { skip: !token },
+  );
   const contacts = useListContactsQuery(undefined, { skip: !token });
   const [createBrand, createBrandState] = useCreateBrandMutation();
   const [deleteBrand] = useDeleteBrandMutation();
@@ -237,6 +180,13 @@ export default function BrandsPage() {
   }, [contactSearchInput]);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedBrandSearch(brandSearchInput);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [brandSearchInput]);
+
+  useEffect(() => {
     if (!isContactDropdownOpen) return;
 
     const onPointerDown = (event: MouseEvent | TouchEvent) => {
@@ -266,6 +216,7 @@ export default function BrandsPage() {
   function onThemeChange(value: "light" | "dark" | "system") {
     setThemeMode(value);
     window.localStorage.setItem("venta-dashboard-theme", value);
+    window.dispatchEvent(new CustomEvent("venta-theme-change", { detail: value }));
   }
 
   async function onSubmitBrandForm(values: {
@@ -312,10 +263,10 @@ export default function BrandsPage() {
 
       if (editingBrandId) {
         await updateBrand({ id: editingBrandId, ...payload }).unwrap();
-        setNotice({ type: "success", text: "Brand updated." });
+        notifySuccess("Brand updated.");
       } else {
         await createBrand(payload).unwrap();
-        setNotice({ type: "success", text: "Brand created." });
+        notifySuccess("Brand created.");
       }
       brandForm.reset();
       setSelectedContactIds([]);
@@ -324,7 +275,7 @@ export default function BrandsPage() {
       setEditingBrandId(null);
       setInitialEditState(null);
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Save brand failed"));
     }
   }
 
@@ -332,9 +283,9 @@ export default function BrandsPage() {
     if (!confirm(`Delete brand "${name}"? This will also delete related contacts and logs.`)) return;
     try {
       await deleteBrand(id).unwrap();
-      setNotice({ type: "success", text: "Brand deleted." });
+      notifySuccess("Brand deleted.");
     } catch (err) {
-      setNotice({ type: "error", text: getErrorMessage(err) });
+      notifyError(getErrorMessage(err, "Delete brand failed"));
     }
   }
 
@@ -402,6 +353,17 @@ export default function BrandsPage() {
     setInitialEditState(null);
   }
 
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && showCreateBrandModal) {
+        onCloseCreateBrandModal();
+      }
+    };
+
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [showCreateBrandModal]);
+
   function removeSelectedContact(contactId: string) {
     setSelectedContactIds((prev) => prev.filter((id) => id !== contactId));
   }
@@ -433,10 +395,13 @@ export default function BrandsPage() {
   }
 
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
+  const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
+    ? ({ "--base-color": "#1e293b", "--highlight-color": "#334155" } as CSSProperties)
+    : undefined;
 
   return (
     <AppShell isDarkTheme={isDarkTheme}>
-      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"}>
+      <main className={isDarkTheme ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-100"} style={skeletonThemeStyle}>
         <header className={isDarkTheme ? "border-b border-white/10 bg-slate-900 px-6 py-3 shadow-sm shadow-black/20" : "border-b bg-white px-6 py-3 shadow-sm"}>
           <div className="mx-auto flex max-w-7xl items-center justify-between">
             <div className="flex items-center gap-3">
@@ -469,68 +434,99 @@ export default function BrandsPage() {
         </header>
 
         <div className="mx-auto max-w-7xl space-y-6 p-6">
-          {notice && <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />}
-
           <div className="grid gap-6">
             <Card className={isDarkTheme ? "border-white/10 bg-slate-900 text-slate-100 shadow-black/20" : undefined}>
               <CardHeader>
                 <CardTitle>Brands</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="mb-4 flex justify-end">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="w-full md:max-w-xl">
+                    <Input
+                      value={brandSearchInput}
+                      onChange={(e) => setBrandSearchInput(e.target.value)}
+                      placeholder="Search brands, industry, owner, or contacts..."
+                      className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                    />
+                  </div>
                   <Button className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined} onClick={onOpenCreateBrandModal}>
                     Add Brand
                   </Button>
                 </div>
-                <Table>
-                  <THead>
-                    <TR>
-                      <TH>Name</TH>
-                      <TH>Contacts</TH>
-                      <TH>Priority</TH>
-                      <TH>Industry</TH>
-                      <TH>Expected Rev.</TH>
-                      <TH>Owner</TH>
-                      <TH></TH>
-                    </TR>
-                  </THead>
-                  <TBody>
-                    {brands.isLoading && <TableLoading cols={7} />}
-                    {brands.isError && <TableError cols={7} onRetry={() => brands.refetch()} />}
-                    {brands.data?.length === 0 && <TableEmpty cols={7} message="No brands yet. Create one to get started." />}
+                {brands.isLoading ? (
+                  <div className="rounded-md border border-dashed border-slate-300 p-6">
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {Array.from({ length: 6 }).map((_, index) => (
+                        <div key={index} className="rounded-lg border border-slate-200 bg-white p-4">
+                          <Skeleton height={20} width="60%" />
+                          <Skeleton height={16} count={4} className="mt-2" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {brands.isError ? (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
+                    Failed to load brands.{" "}
+                    <button onClick={() => brands.refetch()} className="underline hover:opacity-70">
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
+                {!brands.isLoading && !brands.isError && brands.data?.length === 0 ? (
+                  <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/50 p-6 text-center text-sm text-slate-300" : "rounded-md border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600"}>
+                    {debouncedBrandSearch
+                      ? `No brands found for "${debouncedBrandSearch}".`
+                      : "No brands yet. Create one to get started."}
+                  </div>
+                ) : null}
+                {!brands.isLoading && !brands.isError && (brands.data?.length ?? 0) > 0 ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {brands.data?.map((b) => (
-                      <TR key={b.id}>
-                        <TD className="font-medium">{b.name}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>
-                          {b.contacts?.length ? b.contacts.map((c) => c.name).join(", ") : "-"}
-                        </TD>
-                        <TD>
+                      <div
+                        key={b.id}
+                        className={isDarkTheme ? "rounded-lg border border-white/10 bg-slate-800/80 p-4" : "rounded-lg border border-slate-200 bg-white p-4"}
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <Link
+                            href={`/brands/${b.id}`}
+                            className={isDarkTheme ? "text-base font-semibold text-cyan-300 hover:underline" : "text-base font-semibold text-blue-700 hover:underline"}
+                          >
+                            {b.name}
+                          </Link>
                           <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${
                             b.priority === "HIGH" ? "bg-red-100 text-red-700"
                             : b.priority === "MEDIUM" ? "bg-amber-100 text-amber-700"
                             : "bg-slate-100 text-slate-600"
                           }`}>{b.priority}</span>
-                        </TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{b.industry ?? "-"}</TD>
-                        <TD>${Number(b.expectedRevenue).toLocaleString()}</TD>
-                        <TD className={isDarkTheme ? "text-slate-300" : "text-slate-500"}>{b.owner?.name ?? b.ownerId}</TD>
-                        <TD>
-                          <div className="flex items-center gap-3">
-                            <button
-                              onClick={() => onOpenEditBrand(b.id)}
-                              className={isDarkTheme ? "text-xs text-cyan-300 hover:underline" : "text-xs text-blue-600 hover:underline"}
-                            >
-                              Edit
-                            </button>
-                            <button onClick={() => onDeleteBrand(b.id, b.name)} className="text-xs text-red-500 hover:underline">
-                              Delete
-                            </button>
-                          </div>
-                        </TD>
-                      </TR>
+                        </div>
+                        <div className={isDarkTheme ? "space-y-1 text-sm text-slate-300" : "space-y-1 text-sm text-slate-600"}>
+                          <p><span className="font-medium">Industry:</span> {b.industry ?? "-"}</p>
+                          <p><span className="font-medium">Expected Revenue:</span> {formatInrCurrency(b.expectedRevenue)}</p>
+                          <p><span className="font-medium">Owner:</span> {b.owner?.name ?? b.ownerId}</p>
+                          <p><span className="font-medium">Contacts:</span> {b.contacts?.length ?? 0}</p>
+                        </div>
+                        <div className="mt-4 flex items-center gap-3 text-xs">
+                          <Link
+                            href={`/brands/${b.id}`}
+                            className={isDarkTheme ? "text-cyan-300 hover:underline" : "text-blue-600 hover:underline"}
+                          >
+                            View details
+                          </Link>
+                          <button
+                            onClick={() => onOpenEditBrand(b.id)}
+                            className={isDarkTheme ? "text-cyan-300 hover:underline" : "text-blue-600 hover:underline"}
+                          >
+                            Edit
+                          </button>
+                          <button onClick={() => onDeleteBrand(b.id, b.name)} className="text-red-500 hover:underline">
+                            Delete
+                          </button>
+                        </div>
+                      </div>
                     ))}
-                  </TBody>
-                </Table>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>
@@ -707,6 +703,11 @@ export default function BrandsPage() {
                           <p className={isDarkTheme ? "px-3 py-2 text-xs text-slate-400" : "px-3 py-2 text-xs text-slate-500"}>
                             No contacts found.
                           </p>
+                        ) : null}
+                        {contacts.isLoading ? (
+                          <div className="px-3 py-2">
+                            <Skeleton height={14} count={3} />
+                          </div>
                         ) : null}
                         {contactsVisibleCount < filteredContacts.length ? (
                           <button

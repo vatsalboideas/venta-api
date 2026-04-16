@@ -1,4 +1,4 @@
-export type Role = "BOSS" | "EMPLOYEE" | "INTERN";
+export type Role = "BOSS" | "MANAGER" | "EMPLOYEE" | "INTERN";
 export type Priority = "HIGH" | "MEDIUM" | "LOW";
 export type ForecastCategory = "PIPELINE" | "COMMIT" | "CLOSED";
 export type LogStatus =
@@ -170,6 +170,29 @@ export type LogItem = {
   updatedAt?: string;
 };
 
+export type LogRevision = {
+  id: string;
+  logId: string;
+  revisionType: "CREATED" | "UPDATED";
+  title: string;
+  brandId: string;
+  contactId: string;
+  status: LogStatus;
+  priority: Priority;
+  assignedTo: string;
+  lastContactDate: string;
+  followUpDate: string;
+  meetingDate: string;
+  actualRevenue: number;
+  notes: string;
+  changedBy: string;
+  changedAt: string;
+  brand?: Pick<Brand, "id" | "name">;
+  contact?: Pick<Contact, "id" | "name">;
+  assignee?: Pick<User, "id" | "name" | "email" | "role">;
+  changedByUser?: Pick<User, "id" | "name" | "email" | "role">;
+};
+
 export type CreateLogRequest = {
   title: string;
   brandId: string;
@@ -199,4 +222,12 @@ export type LeaderboardItem = {
   userName: string;
   totalRevenue: number;
   rank: number;
+};
+
+export type GlobalSearchResponse = {
+  query: string;
+  users: Array<Pick<User, "id" | "name" | "email" | "role">>;
+  brands: Array<Pick<Brand, "id" | "name" | "industry" | "priority" | "ownerId">>;
+  contacts: Array<Pick<Contact, "id" | "name" | "position" | "email" | "phone" | "brandId">>;
+  logs: Array<Pick<LogItem, "id" | "title" | "status" | "priority" | "brandId" | "contactId" | "assignedTo">>;
 };

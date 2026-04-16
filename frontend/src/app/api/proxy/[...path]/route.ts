@@ -3,8 +3,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { decryptServerPayload, encryptServerPayload } from "@/lib/server-encryption";
 
 const backendBaseUrl = process.env.BACKEND_API_URL ?? "http://localhost:4000";
-const clientSecret = process.env.CLIENT_ENCRYPTION_SECRET ?? "frontend-dev-secret";
+const clientSecret =
+  process.env.CLIENT_ENCRYPTION_SECRET ??
+  process.env.NEXT_PUBLIC_CLIENT_ENCRYPTION_SECRET ??
+  "frontend-dev-secret";
 const backendSecret = process.env.BACKEND_ENCRYPTION_SECRET ?? "backend-dev-secret";
+
+async function parseJsonSafely(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
 
 async function handle(req: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   try {
@@ -13,6 +24,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
     const targetUrl = new URL(`${backendBaseUrl}/${targetPath}`);
     req.nextUrl.searchParams.forEach((value, key) => targetUrl.searchParams.set(key, value));
 
+    let plainBody: unknown = {};
     let forwardedBody: BodyInit | undefined;
     if (req.method !== "GET" && req.method !== "HEAD") {
       let incoming: { payload?: string } | null = null;
@@ -22,7 +34,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
         // Body is empty or not JSON — treat as empty object
         incoming = null;
       }
-      let plainBody: unknown = incoming ?? {};
+      plainBody = incoming ?? {};
       if (incoming?.payload) {
         try {
           plainBody = decryptServerPayload(incoming.payload, clientSecret);
@@ -33,31 +45,64 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
       forwardedBody = JSON.stringify(encryptServerPayload(plainBody, backendSecret));
     }
 
-    let backendResponse: Response;
-    try {
-      backendResponse = await fetch(targetUrl, {
+    const requestIsReadOnly = req.method === "GET" || req.method === "HEAD";
+    const callBackend = async (useEncryption: boolean) => {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        authorization: req.headers.get("authorization") ?? "",
+      };
+      if (useEncryption) {
+        headers["x-encrypted"] = "1";
+      }
+
+      const response = await fetch(targetUrl, {
         method: req.method,
-        headers: {
-          "content-type": "application/json",
-          "x-encrypted": "1",
-          authorization: req.headers.get("authorization") ?? "",
-        },
-        body: forwardedBody,
+        headers,
+        body: requestIsReadOnly
+          ? undefined
+          : useEncryption
+            ? forwardedBody
+            : JSON.stringify(plainBody),
         cache: "no-store",
       });
+
+      const json = (await parseJsonSafely(response)) as { payload?: string; message?: string } | null;
+      return { response, json };
+    };
+
+    let backendResponse: Response;
+    let backendJson: { payload?: string; message?: string } | null;
+    try {
+      ({ response: backendResponse, json: backendJson } = await callBackend(true));
     } catch {
       return NextResponse.json({ message: "Could not reach the backend. Please try again later." }, { status: 502 });
     }
 
+    const shouldFallbackToPlain =
+      backendResponse.status === 400 &&
+      backendJson &&
+      typeof backendJson === "object" &&
+      backendJson.message === "Invalid encrypted payload";
+
     let plain: unknown;
+    let responseDecryptFailed = false;
     try {
-      const backendJson = (await backendResponse.json()) as { payload?: string };
       plain = backendJson?.payload
         ? decryptServerPayload<Record<string, unknown> | unknown[]>(backendJson.payload, backendSecret)
         : backendJson;
     } catch {
-      // Backend returned empty body (e.g. 204 No Content) or non-JSON
-      plain = null;
+      responseDecryptFailed = true;
+      plain = backendJson;
+    }
+
+    // Global fallback for all APIs: retry plain when encrypted request/response path breaks.
+    if (shouldFallbackToPlain || responseDecryptFailed) {
+      try {
+        ({ response: backendResponse, json: backendJson } = await callBackend(false));
+        plain = backendJson;
+      } catch {
+        return NextResponse.json({ message: "Could not reach the backend. Please try again later." }, { status: 502 });
+      }
     }
 
     if (plain === null) {

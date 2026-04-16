@@ -58,9 +58,32 @@ function parseNewContacts(value: unknown): NewBrandContactInput[] {
   });
 }
 
-export async function listBrands(_req: Request, res: Response, next: NextFunction) {
+export async function listBrands(req: Request, res: Response, next: NextFunction) {
   try {
+    const rawQuery = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const where = rawQuery
+      ? {
+          OR: [
+            { name: { contains: rawQuery, mode: "insensitive" as const } },
+            { industry: { contains: rawQuery, mode: "insensitive" as const } },
+            { owner: { name: { contains: rawQuery, mode: "insensitive" as const } } },
+            {
+              contacts: {
+                some: {
+                  OR: [
+                    { name: { contains: rawQuery, mode: "insensitive" as const } },
+                    { email: { contains: rawQuery, mode: "insensitive" as const } },
+                    { phone: { contains: rawQuery, mode: "insensitive" as const } },
+                  ],
+                },
+              },
+            },
+          ],
+        }
+      : undefined;
+
     const brands = await prisma.brand.findMany({
+      where,
       include: {
         owner: { select: { id: true, name: true, email: true, role: true } },
         contacts: { select: { id: true, name: true, position: true, email: true, phone: true } },

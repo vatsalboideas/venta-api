@@ -29,4 +29,9 @@ export function persistToken(token: string | null) {
   }
 
   store.dispatch(setToken(token));
+
+  // Always send users back to the auth screen after explicit logout.
+  if (token === null && typeof window !== "undefined" && window.location.pathname !== "/") {
+    window.location.replace("/");
+  }
 }
