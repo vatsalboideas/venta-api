@@ -36,6 +36,19 @@ export type User = {
   createdAt?: string;
   updatedAt?: string;
 };
+export type Department = {
+  id: string;
+  name: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type EmployeeType = {
+  id: string;
+  code: Role;
+  label: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 export type RegisterRequest = {
   name: string;
@@ -76,9 +89,24 @@ export type CreateInternRequest = {
   email: string;
   password: string;
   phone?: string;
+  role?: "MANAGER" | "EMPLOYEE" | "INTERN";
   position?: string;
   department?: string;
 };
+export type UpdateUserRequest = {
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  position?: string | null;
+  department?: string | null;
+  role?: "MANAGER" | "EMPLOYEE" | "INTERN";
+};
+export type DeleteUserRequest = {
+  id: string;
+  transferToUserId?: string;
+};
+export type DepartmentRequest = { name: string };
+export type EmployeeTypeRequest = { code: Role; label: string };
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
 
@@ -160,7 +188,7 @@ export type LogItem = {
   lastContactDate: string;
   followUpDate: string;
   meetingDate: string;
-  actualRevenue: number;
+  actualRevenue: number | null;
   expectedRevenue?: number;
   notes: string;
   brand?: Pick<Brand, "id" | "name" | "expectedRevenue">;
@@ -183,7 +211,7 @@ export type LogRevision = {
   lastContactDate: string;
   followUpDate: string;
   meetingDate: string;
-  actualRevenue: number;
+  actualRevenue: number | null;
   notes: string;
   changedBy: string;
   changedAt: string;
@@ -203,7 +231,7 @@ export type CreateLogRequest = {
   lastContactDate: string;
   followUpDate: string;
   meetingDate: string;
-  actualRevenue: number;
+  actualRevenue?: number | null;
   notes: string;
 };
 

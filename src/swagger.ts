@@ -87,9 +87,20 @@ export const openApiSpec: OpenAPIV3.Document = {
           token: { type: "string", example: "123456" },
         },
       },
+      UpdateEmployeeRequest: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          email: { type: "string", format: "email" },
+          phone: { type: "string", nullable: true },
+          position: { type: "string", nullable: true },
+          department: { type: "string", nullable: true },
+          role: { type: "string", enum: ["MANAGER", "EMPLOYEE", "INTERN"] },
+        },
+      },
       Role: {
         type: "string",
-        enum: ["BOSS", "EMPLOYEE", "INTERN"],
+        enum: ["BOSS", "MANAGER", "EMPLOYEE", "INTERN"],
       },
       Priority: {
         type: "string",
@@ -232,7 +243,7 @@ export const openApiSpec: OpenAPIV3.Document = {
           lastContactDate: { type: "string", format: "date-time" },
           followUpDate: { type: "string", format: "date-time" },
           meetingDate: { type: "string", format: "date-time" },
-          actualRevenue: { type: "string" },
+          actualRevenue: { type: "string", nullable: true },
           notes: { type: "string" },
         },
       },
@@ -370,6 +381,61 @@ export const openApiSpec: OpenAPIV3.Document = {
         responses: {
           "200": { description: "Current user profile" },
           "401": { description: "Unauthorized" },
+        },
+      },
+    },
+    "/auth/users": {
+      get: {
+        summary: "List employees and interns (BOSS only)",
+        responses: {
+          "200": { description: "Users list" },
+          "401": { description: "Unauthorized" },
+          "403": { description: "Forbidden" },
+        },
+      },
+    },
+    "/auth/users/{id}": {
+      patch: {
+        summary: "Update employee fields (BOSS only)",
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/UpdateEmployeeRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Employee updated" },
+          "401": { description: "Unauthorized" },
+          "403": { description: "Forbidden" },
+          "404": { description: "Employee not found" },
+        },
+      },
+      delete: {
+        summary: "Delete employee (BOSS only)",
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "204": { description: "Employee deleted" },
+          "401": { description: "Unauthorized" },
+          "403": { description: "Forbidden" },
+          "404": { description: "Employee not found" },
+          "409": { description: "Employee has linked records" },
         },
       },
     },

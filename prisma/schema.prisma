@@ -61,9 +61,34 @@ model User {
   logRevisionsEdited   LogRevision[] @relation("LogRevisionEditor")
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime? @map("deleted_at")
 
   @@index([createdBy])
+  @@index([deletedAt])
   @@map("users")
+}
+
+model Department {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([deletedAt])
+  @@map("departments")
+}
+
+model EmployeeType {
+  id        String    @id @default(uuid())
+  code      Role      @unique
+  label     String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([deletedAt])
+  @@map("employee_types")
 }
 
 model Brand {
@@ -82,8 +107,10 @@ model Brand {
   logRevisions     LogRevision[]
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?        @map("deleted_at")
 
   @@index([ownerId])
+  @@index([deletedAt])
   @@map("brands")
 }
 
@@ -102,9 +129,11 @@ model Contact {
   logRevisions LogRevision[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  deletedAt  DateTime? @map("deleted_at")
 
   @@index([brandId])
   @@index([createdBy])
+  @@index([deletedAt])
   @@map("contacts")
 }
 
@@ -122,16 +151,18 @@ model Log {
   lastContactDate DateTime  @map("last_contact_date")
   followUpDate    DateTime  @map("follow_up_date")
   meetingDate     DateTime  @map("meeting_date")
-  actualRevenue   Decimal   @db.Decimal(14, 2) @map("actual_revenue")
+  actualRevenue   Decimal?  @db.Decimal(14, 2) @map("actual_revenue")
   notes           String
   revisions       LogRevision[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime? @map("deleted_at")
 
   @@index([brandId])
   @@index([contactId])
   @@index([assignedTo])
   @@index([status])
+  @@index([deletedAt])
   @@map("logs")
 }
 
@@ -152,13 +183,15 @@ model LogRevision {
   lastContactDate DateTime        @map("last_contact_date")
   followUpDate    DateTime        @map("follow_up_date")
   meetingDate     DateTime        @map("meeting_date")
-  actualRevenue   Decimal         @db.Decimal(14, 2) @map("actual_revenue")
+  actualRevenue   Decimal?        @db.Decimal(14, 2) @map("actual_revenue")
   notes           String
   changedBy       String          @map("changed_by")
   changedByUser   User            @relation("LogRevisionEditor", fields: [changedBy], references: [id], onDelete: Restrict)
   changedAt       DateTime        @default(now()) @map("changed_at")
+  deletedAt       DateTime?       @map("deleted_at")
 
   @@index([logId, changedAt])
   @@index([changedBy])
+  @@index([deletedAt])
   @@map("log_revisions")
 }

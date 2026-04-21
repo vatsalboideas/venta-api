@@ -3,6 +3,7 @@ import { Prisma, Role } from "@prisma/client";
 
 import { assertContactWriteAccessOrThrow } from "../middleware/authz";
 import { prisma } from "../prisma";
+import { isConcurrentWriteConflict, lockRowOrThrow } from "../utils/concurrency";
 import { requireEmail, requireString } from "../utils/validate";
 
 type ContactIdParams = { id: string };
@@ -127,21 +128,27 @@ export async function updateContact(req: Request<ContactIdParams>, res: Response
       if (!brand) return res.status(404).json({ message: "Brand not found" });
     }
 
-    const updated = await prisma.contact.update({
-      where: { id: req.params.id },
-      data: {
-        name: user.role === Role.BOSS ? parsedName : undefined,
-        position: parsedPosition,
-        email: parsedEmail,
-        phone: parsedPhone,
-        address: address as string | undefined,
-        brandId: user.role === Role.BOSS ? parsedBrandId : undefined,
-        createdBy: user.role === Role.BOSS ? (createdBy as string | undefined) : undefined,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "contacts", req.params.id, "Contact not found");
+      return tx.contact.update({
+        where: { id: req.params.id },
+        data: {
+          name: user.role === Role.BOSS ? parsedName : undefined,
+          position: parsedPosition,
+          email: parsedEmail,
+          phone: parsedPhone,
+          address: address as string | undefined,
+          brandId: user.role === Role.BOSS ? parsedBrandId : undefined,
+          createdBy: user.role === Role.BOSS ? (createdBy as string | undefined) : undefined,
+        },
+      });
     });
 
     return res.json(updated);
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Contact is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Contact not found" });
     }
@@ -153,9 +160,45 @@ export async function deleteContact(req: Request<ContactIdParams>, res: Response
   try {
     const user = req.user!;
     await assertContactWriteAccessOrThrow(user, req.params.id);
-    await prisma.contact.delete({ where: { id: req.params.id } });
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, brandId: true },
+    });
+    if (!contact) return res.status(404).json({ message: "Contact not found" });
+
+    if (contact.brandId) {
+      const brandContactCount = await prisma.contact.count({
+        where: { brandId: contact.brandId },
+      });
+      if (brandContactCount <= 1) {
+        return res.status(400).json({
+          message: "Cannot delete the only contact associated with this brand",
+        });
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "contacts", req.params.id, "Contact not found");
+      const logs = await tx.log.findMany({
+        where: { contactId: req.params.id },
+        select: { id: true },
+      });
+      const logIds = logs.map((log) => log.id);
+
+      if (logIds.length > 0) {
+        await tx.logRevision.deleteMany({
+          where: { logId: { in: logIds } },
+        });
+      }
+
+      await tx.log.deleteMany({ where: { contactId: req.params.id } });
+      await tx.contact.delete({ where: { id: req.params.id } });
+    });
     return res.status(204).send();
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Contact is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Contact not found" });
     }

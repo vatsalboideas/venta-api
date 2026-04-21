@@ -23,6 +23,8 @@ import {
   useListBrandsQuery,
   useListContactsQuery,
   useListLogsQuery,
+  useListUsersQuery,
+  useMeQuery,
   useUpdateLogMutation,
 } from "@/store/services/api";
 import type { RootState } from "@/store";
@@ -78,6 +80,10 @@ function AutocompleteField({
   noResultsText,
   isDarkTheme,
   onChange,
+  searchValue,
+  onSearchChange,
+  hasMore,
+  onLoadMore,
 }: {
   id: string;
   value: string;
@@ -87,6 +93,10 @@ function AutocompleteField({
   noResultsText: string;
   isDarkTheme: boolean;
   onChange: (id: string) => void;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+  hasMore?: boolean;
+  onLoadMore?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
@@ -95,8 +105,13 @@ function AutocompleteField({
   const debounceRef = useRef<number | null>(null);
 
   const selected = options.find((o) => o.id === value);
+  const liveSearchValue = onSearchChange ? (searchValue ?? "") : searchInput;
+  const inputDisplayValue = isOpen
+    ? (liveSearchValue || selected?.label || "")
+    : (selected?.label ?? "");
 
   const filteredOptions = useMemo(() => {
+    if (onSearchChange) return options;
     const term = debouncedSearch.trim().toLowerCase();
     if (!term) return options;
     return options.filter((o) => {
@@ -113,10 +128,15 @@ function AutocompleteField({
     // Always reopen with a fresh query so users can quickly change selections.
     setSearchInput("");
     setDebouncedSearch("");
+    onSearchChange?.("");
     setVisibleCount(20);
   }
 
   function handleInputChange(next: string) {
+    if (onSearchChange) {
+      onSearchChange(next);
+      return;
+    }
     setSearchInput(next);
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
@@ -129,6 +149,7 @@ function AutocompleteField({
     onChange(optionId);
     setSearchInput("");
     setDebouncedSearch("");
+    onSearchChange?.("");
     setIsOpen(false);
   }
 
@@ -136,7 +157,7 @@ function AutocompleteField({
     <div className="relative">
       <Input
         id={id}
-        value={isOpen ? searchInput : (selected?.label ?? "")}
+        value={inputDisplayValue}
         onFocus={handleOpen}
         onClick={handleOpen}
         onChange={(e) => handleInputChange(e.target.value)}
@@ -186,11 +207,17 @@ function AutocompleteField({
               {noResultsText}
             </p>
           )}
-          {!loading && visibleCount < filteredOptions.length ? (
+          {!loading && ((onLoadMore && hasMore) || (!onLoadMore && visibleCount < filteredOptions.length)) ? (
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setVisibleCount((prev) => prev + 20)}
+              onClick={() => {
+                if (onLoadMore) {
+                  onLoadMore();
+                  return;
+                }
+                setVisibleCount((prev) => prev + 20);
+              }}
               className={
                 isDarkTheme
                   ? "w-full border-t border-white/10 px-3 py-2 text-xs text-cyan-300 hover:bg-slate-800"
@@ -223,12 +250,14 @@ export default function LogsPage() {
 
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [historyLogId, setHistoryLogId] = useState<string | null>(null);
+  const [pendingDeleteLog, setPendingDeleteLog] = useState<{ id: string; title: string } | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const createLogForm = useForm({
     defaultValues: {
       title: "",
       brandId: "",
+      assignedTo: "",
       status: "" as LogStatus | "",
       priority: "" as Priority | "",
       contactId: "",
@@ -243,6 +272,7 @@ export default function LogsPage() {
     defaultValues: {
       title: "",
       brandId: "",
+      assignedTo: "",
       status: "" as LogStatus | "",
       priority: "" as Priority | "",
       contactId: "",
@@ -255,10 +285,26 @@ export default function LogsPage() {
   });
   const logBrandId = useWatch({ control: createLogForm.control, name: "brandId" });
   const editLogBrandId = useWatch({ control: editLogForm.control, name: "brandId" });
+  const [createAssigneeSearchInput, setCreateAssigneeSearchInput] = useState("");
+  const [debouncedCreateAssigneeSearch, setDebouncedCreateAssigneeSearch] = useState("");
+  const [createAssigneeVisibleLimit, setCreateAssigneeVisibleLimit] = useState(20);
+  const [editAssigneeSearchInput, setEditAssigneeSearchInput] = useState("");
+  const [debouncedEditAssigneeSearch, setDebouncedEditAssigneeSearch] = useState("");
+  const [editAssigneeVisibleLimit, setEditAssigneeVisibleLimit] = useState(20);
 
   const brands = useListBrandsQuery(undefined, { skip: !token });
   const contacts = useListContactsQuery(undefined, { skip: !token });
   const logs = useListLogsQuery(undefined, { skip: !token });
+  const me = useMeQuery(undefined, { skip: !token });
+  const isBoss = me.data?.role === "BOSS";
+  const createAssignees = useListUsersQuery(
+    { q: debouncedCreateAssigneeSearch.trim() || undefined, page: 1, limit: createAssigneeVisibleLimit },
+    { skip: !token || !isBoss },
+  );
+  const editAssignees = useListUsersQuery(
+    { q: debouncedEditAssigneeSearch.trim() || undefined, page: 1, limit: editAssigneeVisibleLimit },
+    { skip: !token || !isBoss },
+  );
   const [createLog, createLogState] = useCreateLogMutation();
   const [deleteLog] = useDeleteLogMutation();
   const [updateLog, updateLogState] = useUpdateLogMutation();
@@ -286,7 +332,7 @@ export default function LogsPage() {
         log.lastContactDate?.slice(0, 10),
         log.followUpDate?.slice(0, 10),
         log.meetingDate?.slice(0, 10),
-        String(log.actualRevenue),
+        log.actualRevenue === null ? "" : String(log.actualRevenue),
       ]
         .join(" ")
         .toLowerCase();
@@ -300,6 +346,20 @@ export default function LogsPage() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCreateAssigneeSearch(createAssigneeSearchInput);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [createAssigneeSearchInput]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedEditAssigneeSearch(editAssigneeSearchInput);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [editAssigneeSearchInput]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -317,6 +377,7 @@ export default function LogsPage() {
   async function onCreateLog(values: {
     title: string;
     brandId: string;
+    assignedTo: string;
     status: LogStatus | "";
     priority: Priority | "";
     contactId: string;
@@ -327,7 +388,8 @@ export default function LogsPage() {
     notes: string;
   }) {
     const selectedBrandOwnerId = brands.data?.find((b) => b.id === values.brandId)?.ownerId ?? "";
-    if (!selectedBrandOwnerId) {
+    const assignedTo = isBoss ? values.assignedTo : selectedBrandOwnerId;
+    if (!assignedTo) {
       createLogForm.setError("brandId", { message: "Assigned user is required" });
       return;
     }
@@ -338,11 +400,12 @@ export default function LogsPage() {
         contactId: values.contactId,
         status: values.status as LogStatus,
         priority: values.priority as Priority,
-        assignedTo: selectedBrandOwnerId,
+        assignedTo,
         lastContactDate: values.lastContactDate,
         followUpDate: values.followUpDate,
         meetingDate: values.meetingDate,
-        actualRevenue: Number(values.actualRevenue),
+        actualRevenue:
+          values.actualRevenue.trim() === "" ? null : Number(values.actualRevenue),
         notes: values.notes.trim(),
       }).unwrap();
       notifySuccess("Log created.");
@@ -353,11 +416,11 @@ export default function LogsPage() {
     }
   }
 
-  async function onDeleteLog(id: string, title: string) {
-    if (!confirm(`Delete log "${title}"?`)) return;
+  async function onDeleteLog(id: string) {
     try {
       await deleteLog(id).unwrap();
       notifySuccess("Log deleted.");
+      setPendingDeleteLog(null);
     } catch (err) {
       notifyError(getErrorMessage(err, "Delete log failed"));
     }
@@ -366,17 +429,21 @@ export default function LogsPage() {
   function onOpenEditLog(id: string) {
     const log = logs.data?.find((item) => item.id === id);
     if (!log) return;
+    setEditAssigneeSearchInput("");
+    setDebouncedEditAssigneeSearch("");
+    setEditAssigneeVisibleLimit(20);
     setEditingLogId(log.id);
     editLogForm.reset({
       title: log.title ?? "",
       brandId: log.brandId ?? "",
+      assignedTo: log.assignedTo ?? "",
       status: (log.status ?? "") as LogStatus | "",
       priority: (log.priority ?? "") as Priority | "",
       contactId: log.contactId ?? "",
       lastContactDate: (log.lastContactDate ?? "").slice(0, 10),
       followUpDate: (log.followUpDate ?? "").slice(0, 10),
       meetingDate: (log.meetingDate ?? "").slice(0, 10),
-      actualRevenue: log.actualRevenue !== undefined ? String(log.actualRevenue) : "",
+      actualRevenue: log.actualRevenue === null || log.actualRevenue === undefined ? "" : String(log.actualRevenue),
       notes: log.notes ?? "",
     });
   }
@@ -384,16 +451,25 @@ export default function LogsPage() {
   function onCloseEditLog() {
     setEditingLogId(null);
     editLogForm.reset();
+    setEditAssigneeSearchInput("");
+    setDebouncedEditAssigneeSearch("");
+    setEditAssigneeVisibleLimit(20);
   }
 
   function onOpenCreateLogModal() {
     createLogForm.reset();
+    setCreateAssigneeSearchInput("");
+    setDebouncedCreateAssigneeSearch("");
+    setCreateAssigneeVisibleLimit(20);
     setShowCreateLogModal(true);
   }
 
   function onCloseCreateLogModal() {
     setShowCreateLogModal(false);
     createLogForm.reset();
+    setCreateAssigneeSearchInput("");
+    setDebouncedCreateAssigneeSearch("");
+    setCreateAssigneeVisibleLimit(20);
   }
 
   function onOpenLogHistory(id: string) {
@@ -403,6 +479,25 @@ export default function LogsPage() {
   function onCloseLogHistory() {
     setHistoryLogId(null);
   }
+
+  useEffect(() => {
+    if (!isBoss) return;
+    const brandOwnerId = brands.data?.find((b) => b.id === logBrandId)?.ownerId ?? "";
+    const current = createLogForm.getValues("assignedTo");
+    if (!current && brandOwnerId) {
+      createLogForm.setValue("assignedTo", brandOwnerId, { shouldDirty: false });
+    }
+  }, [brands.data, createLogForm, isBoss, logBrandId]);
+
+  useEffect(() => {
+    if (!isBoss || !editingLogId) return;
+    const current = editLogForm.getValues("assignedTo");
+    if (current) return;
+    const ownerId = brands.data?.find((b) => b.id === editLogBrandId)?.ownerId ?? "";
+    if (ownerId) {
+      editLogForm.setValue("assignedTo", ownerId, { shouldDirty: false });
+    }
+  }, [brands.data, editLogBrandId, editLogForm, editingLogId, isBoss]);
 
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
@@ -429,6 +524,7 @@ export default function LogsPage() {
   async function onUpdateLog(values: {
     title: string;
     brandId: string;
+    assignedTo: string;
     status: LogStatus | "";
     priority: Priority | "";
     contactId: string;
@@ -440,7 +536,8 @@ export default function LogsPage() {
   }) {
     if (!editingLogId) return;
     const selectedEditBrandOwnerId = brands.data?.find((b) => b.id === values.brandId)?.ownerId ?? "";
-    if (!selectedEditBrandOwnerId) {
+    const assignedTo = isBoss ? values.assignedTo : selectedEditBrandOwnerId;
+    if (!assignedTo) {
       editLogForm.setError("brandId", { message: "Assigned user is required" });
       return;
     }
@@ -452,11 +549,12 @@ export default function LogsPage() {
         contactId: values.contactId,
         status: values.status as LogStatus,
         priority: values.priority as Priority,
-        assignedTo: selectedEditBrandOwnerId,
+        assignedTo,
         lastContactDate: values.lastContactDate,
         followUpDate: values.followUpDate,
         meetingDate: values.meetingDate,
-        actualRevenue: Number(values.actualRevenue),
+        actualRevenue:
+          values.actualRevenue.trim() === "" ? null : Number(values.actualRevenue),
         notes: values.notes.trim(),
       }).unwrap();
       notifySuccess("Log updated.");
@@ -503,6 +601,24 @@ export default function LogsPage() {
   const selectedEditBrandExpectedRevenue =
     selectedEditBrand?.expectedRevenue !== undefined ? Number(selectedEditBrand.expectedRevenue) : NaN;
   const brandOptions = (brands.data ?? []).map((b) => ({ id: b.id, label: b.name }));
+  const createSelectedAssigneeId = createLogForm.watch("assignedTo");
+  const editSelectedAssigneeId = editLogForm.watch("assignedTo");
+  const createAssigneeOptions = useMemo(() => {
+    const options = (createAssignees.data ?? []).map((u) => ({ id: u.id, label: u.name, secondary: u.email }));
+    if (!createSelectedAssigneeId) return options;
+    const exists = options.some((o) => o.id === createSelectedAssigneeId);
+    if (exists) return options;
+    return [{ id: createSelectedAssigneeId, label: selectedBrandAssigneeName || "Selected User" }, ...options];
+  }, [createAssignees.data, createSelectedAssigneeId, selectedBrandAssigneeName]);
+  const editAssigneeOptions = useMemo(() => {
+    const options = (editAssignees.data ?? []).map((u) => ({ id: u.id, label: u.name, secondary: u.email }));
+    if (!editSelectedAssigneeId) return options;
+    const exists = options.some((o) => o.id === editSelectedAssigneeId);
+    if (exists) return options;
+    return [{ id: editSelectedAssigneeId, label: selectedEditBrandAssigneeName || "Selected User" }, ...options];
+  }, [editAssignees.data, editSelectedAssigneeId, selectedEditBrandAssigneeName]);
+  const createAssigneesHasMore = (createAssignees.data?.length ?? 0) >= createAssigneeVisibleLimit;
+  const editAssigneesHasMore = (editAssignees.data?.length ?? 0) >= editAssigneeVisibleLimit;
   const createContactOptions = selectedBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
   const editContactOptions = selectedEditBrandContacts.map((c) => ({ id: c.id, label: c.name, secondary: c.email }));
   return (
@@ -608,13 +724,13 @@ export default function LogsPage() {
                           <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Brand:</strong> {l.brand?.name ?? l.brandId}</p>
                           <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Contact:</strong> {l.contact?.name ?? l.contactId}</p>
                           <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Assignee:</strong> {l.assignee?.name ?? l.assignedTo}</p>
-                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Revenue:</strong> {formatInrCurrency(l.actualRevenue, true)}</p>
+                          <p className={isDarkTheme ? "text-slate-300" : "text-slate-600"}><strong>Revenue:</strong> {l.actualRevenue === null ? "-" : formatInrCurrency(l.actualRevenue, true)}</p>
                           <p className={isDarkTheme ? "text-slate-400" : "text-slate-500"}>{l.notes}</p>
                         </div>
                         <div className="mt-3 flex items-center gap-3">
                           <button onClick={() => onOpenLogHistory(l.id)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-purple-300 transition hover:bg-purple-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-violet-600 transition hover:bg-violet-50 hover:underline"}>History</button>
                           <button onClick={() => onOpenEditLog(l.id)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-cyan-300 transition hover:bg-cyan-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-blue-600 transition hover:bg-blue-50 hover:underline"}>Edit</button>
-                          <button onClick={() => void onDeleteLog(l.id, l.title)} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-red-300 transition hover:bg-red-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-red-600 transition hover:bg-red-50 hover:underline"}>Delete</button>
+                          <button onClick={() => setPendingDeleteLog({ id: l.id, title: l.title })} className={isDarkTheme ? "rounded px-2 py-1 text-xs text-red-300 transition hover:bg-red-500/15 hover:underline" : "rounded px-2 py-1 text-xs text-red-600 transition hover:bg-red-50 hover:underline"}>Delete</button>
                         </div>
                       </div>
                     ))}
@@ -694,8 +810,37 @@ export default function LogsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="logAssignedTo">Assigned To *</Label>
-                  <Input id="logAssignedTo" value={selectedBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
-                  <FieldError msg={createLogForm.formState.errors.brandId?.message} />
+                  {isBoss ? (
+                    <>
+                      <Controller
+                        control={createLogForm.control}
+                        name="assignedTo"
+                        rules={{ required: "Assigned user is required" }}
+                        render={({ field }) => (
+                          <AutocompleteField
+                            id="logAssignedTo"
+                            value={field.value}
+                            options={createAssigneeOptions}
+                            loading={createAssignees.isLoading || createAssignees.isFetching}
+                            placeholder="Search and select assignee..."
+                            noResultsText="No users found."
+                            isDarkTheme={isDarkTheme}
+                            onChange={field.onChange}
+                            searchValue={createAssigneeSearchInput}
+                            onSearchChange={setCreateAssigneeSearchInput}
+                            hasMore={createAssigneesHasMore}
+                            onLoadMore={() => setCreateAssigneeVisibleLimit((prev) => prev + 20)}
+                          />
+                        )}
+                      />
+                      <FieldError msg={createLogForm.formState.errors.assignedTo?.message} />
+                    </>
+                  ) : (
+                    <>
+                      <Input id="logAssignedTo" value={selectedBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                      <FieldError msg={createLogForm.formState.errors.brandId?.message} />
+                    </>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="logLastContactDate">Last Contact Date *</Label>
@@ -717,8 +862,8 @@ export default function LogsPage() {
                   <Input id="logExpectedRevenue" value={Number.isFinite(selectedBrandExpectedRevenue) ? formatInrCurrency(selectedBrandExpectedRevenue, true) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="logActualRevenue">Actual Revenue *</Label>
-                  <Input id="logActualRevenue" type="number" min="0" step="0.01" {...createLogForm.register("actualRevenue", { required: "Actual revenue is required" })} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <Label htmlFor="logActualRevenue">Actual Revenue</Label>
+                  <Input id="logActualRevenue" type="number" min="0" step="0.01" {...createLogForm.register("actualRevenue")} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
                   <FieldError msg={createLogForm.formState.errors.actualRevenue?.message} />
                 </div>
                 <div className="space-y-1">
@@ -787,8 +932,37 @@ export default function LogsPage() {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogAssignedTo">Assigned To *</Label>
-                  <Input id="editLogAssignedTo" value={selectedEditBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
-                  <FieldError msg={editLogForm.formState.errors.brandId?.message} />
+                  {isBoss ? (
+                    <>
+                      <Controller
+                        control={editLogForm.control}
+                        name="assignedTo"
+                        rules={{ required: "Assigned user is required" }}
+                        render={({ field }) => (
+                          <AutocompleteField
+                            id="editLogAssignedTo"
+                            value={field.value}
+                            options={editAssigneeOptions}
+                            loading={editAssignees.isLoading || editAssignees.isFetching}
+                            placeholder="Search and select assignee..."
+                            noResultsText="No users found."
+                            isDarkTheme={isDarkTheme}
+                            onChange={field.onChange}
+                            searchValue={editAssigneeSearchInput}
+                            onSearchChange={setEditAssigneeSearchInput}
+                            hasMore={editAssigneesHasMore}
+                            onLoadMore={() => setEditAssigneeVisibleLimit((prev) => prev + 20)}
+                          />
+                        )}
+                      />
+                      <FieldError msg={editLogForm.formState.errors.assignedTo?.message} />
+                    </>
+                  ) : (
+                    <>
+                      <Input id="editLogAssignedTo" value={selectedEditBrandAssigneeName} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
+                      <FieldError msg={editLogForm.formState.errors.brandId?.message} />
+                    </>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="editLogLastContactDate">Last Contact Date *</Label>
@@ -810,8 +984,8 @@ export default function LogsPage() {
                   <Input id="editLogExpectedRevenue" value={Number.isFinite(selectedEditBrandExpectedRevenue) ? formatInrCurrency(selectedEditBrandExpectedRevenue, true) : ""} readOnly className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-300 focus-visible:ring-cyan-400/30" : "bg-slate-100"} />
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="editLogActualRevenue">Actual Revenue *</Label>
-                  <Input id="editLogActualRevenue" type="number" min="0" step="0.01" {...editLogForm.register("actualRevenue", { required: "Actual revenue is required" })} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
+                  <Label htmlFor="editLogActualRevenue">Actual Revenue</Label>
+                  <Input id="editLogActualRevenue" type="number" min="0" step="0.01" {...editLogForm.register("actualRevenue")} className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 focus-visible:ring-cyan-400/30" : undefined} />
                   <FieldError msg={editLogForm.formState.errors.actualRevenue?.message} />
                 </div>
                 <div className="space-y-1">
@@ -881,7 +1055,7 @@ export default function LogsPage() {
                           <p><strong>Last Contact:</strong> {formatDateDDMonYYYY(revision.lastContactDate)}</p>
                           <p><strong>Follow Up:</strong> {formatDateDDMonYYYY(revision.followUpDate)}</p>
                           <p><strong>Meeting:</strong> {formatDateDDMonYYYY(revision.meetingDate)}</p>
-                          <p><strong>Actual Revenue:</strong> {formatInrCurrency(revision.actualRevenue, true)}</p>
+                          <p><strong>Actual Revenue:</strong> {revision.actualRevenue === null ? "-" : formatInrCurrency(revision.actualRevenue, true)}</p>
                         </div>
                         <div className="mt-2">
                           <p className={isDarkTheme ? "text-xs font-semibold text-slate-200" : "text-xs font-semibold text-slate-700"}>Notes</p>
@@ -894,6 +1068,41 @@ export default function LogsPage() {
                   )}
                 </div>
               ) : null}
+            </div>
+          </div>
+        ) : null}
+        {pendingDeleteLog ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div
+              className={
+                isDarkTheme
+                  ? "w-full max-w-md rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+                  : "w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"
+              }
+            >
+              <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>
+                Delete Log
+              </h3>
+              <p className={isDarkTheme ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>
+                Are you sure you want to delete <strong>{pendingDeleteLog.title}</strong>?
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined}
+                  onClick={() => setPendingDeleteLog(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-red-600 text-white hover:bg-red-500"
+                  onClick={() => onDeleteLog(pendingDeleteLog.id)}
+                >
+                  Delete
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}

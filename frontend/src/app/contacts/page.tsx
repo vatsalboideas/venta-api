@@ -147,6 +147,12 @@ export default function ContactsPage() {
   const [isBrandDropdownOpen, setIsBrandDropdownOpen] = useState(false);
   const [visibleBrandCount, setVisibleBrandCount] = useState(8);
   const [visibleCount, setVisibleCount] = useState(12);
+  const [pendingDeleteContact, setPendingDeleteContact] = useState<{
+    id: string;
+    name: string;
+    canDelete: boolean;
+    reason?: string;
+  } | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const brandLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const brandDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +175,7 @@ export default function ContactsPage() {
     },
     { skip: !token },
   );
+  const allContacts = useListContactsQuery(undefined, { skip: !token });
   const [createContact, createContactState] = useCreateContactMutation();
   const [deleteContact] = useDeleteContactMutation();
   const [updateContact, updateContactState] = useUpdateContactMutation();
@@ -282,11 +289,12 @@ export default function ContactsPage() {
     }
   }
 
-  async function onDeleteContact(id: string, name: string) {
-    if (!confirm(`Delete contact "${name}"?`)) return;
+  async function onDeleteContact(id: string) {
+    if (!pendingDeleteContact?.canDelete) return;
     try {
       await deleteContact(id).unwrap();
       notifySuccess("Contact deleted.");
+      setPendingDeleteContact(null);
     } catch (err) {
       notifyError(getErrorMessage(err, "Delete contact failed"));
     }
@@ -571,7 +579,20 @@ export default function ContactsPage() {
                                 Edit
                               </button>
                               <button
-                                onClick={() => onDeleteContact(contact.id, contact.name)}
+                                onClick={() => {
+                                  const brandContactsCount = contact.brandId
+                                    ? (allContacts.data ?? []).filter((item) => item.brandId === contact.brandId).length
+                                    : 0;
+                                  const canDelete = !contact.brandId || brandContactsCount > 1;
+                                  setPendingDeleteContact({
+                                    id: contact.id,
+                                    name: contact.name,
+                                    canDelete,
+                                    reason: canDelete
+                                      ? undefined
+                                      : "This contact is the only contact associated with this brand, so it cannot be deleted.",
+                                  });
+                                }}
                                 className="text-xs text-red-500 hover:underline"
                               >
                                 Delete
@@ -717,6 +738,52 @@ export default function ContactsPage() {
                   </Button>
                 </div>
               </form>
+            </div>
+          </div>
+        ) : null}
+        {pendingDeleteContact ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div
+              className={
+                isDarkTheme
+                  ? "w-full max-w-md rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+                  : "w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"
+              }
+            >
+              <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>
+                Delete Contact
+              </h3>
+              <p className={isDarkTheme ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>
+                {pendingDeleteContact.canDelete ? (
+                  <>
+                    Delete <strong>{pendingDeleteContact.name}</strong>? This deletes only this contact and its related
+                    logs. The brand will not be deleted.
+                  </>
+                ) : (
+                  <>
+                    <strong>{pendingDeleteContact.name}</strong> cannot be deleted.
+                    {pendingDeleteContact.reason ? ` ${pendingDeleteContact.reason}` : ""}
+                  </>
+                )}
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined}
+                  onClick={() => setPendingDeleteContact(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-red-600 text-white hover:bg-red-500"
+                  disabled={!pendingDeleteContact.canDelete}
+                  onClick={() => onDeleteContact(pendingDeleteContact.id)}
+                >
+                  Delete
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}

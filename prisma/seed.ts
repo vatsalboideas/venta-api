@@ -4,6 +4,41 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 async function main() {
+  const employeeTypeSeed = [
+    { code: Role.BOSS, label: "Boss" },
+    { code: Role.MANAGER, label: "Manager" },
+    { code: Role.EMPLOYEE, label: "Employee" },
+    { code: Role.INTERN, label: "Intern" },
+  ] as const;
+
+  for (const type of employeeTypeSeed) {
+    await prisma.employeeType.upsert({
+      where: { code: type.code },
+      update: { label: type.label },
+      create: { code: type.code, label: type.label },
+    });
+  }
+
+  const seededTypes = await prisma.employeeType.findMany({
+    where: { code: { in: [Role.BOSS, Role.MANAGER, Role.EMPLOYEE, Role.INTERN] } },
+    select: { code: true },
+  });
+  const seededCodes = new Set(seededTypes.map((type) => type.code));
+  if (![Role.BOSS, Role.MANAGER, Role.EMPLOYEE, Role.INTERN].every((code) => seededCodes.has(code))) {
+    throw new Error("Employee type seeding incomplete");
+  }
+
+  await prisma.department.upsert({
+    where: { name: "Executive" },
+    update: {},
+    create: { name: "Executive" },
+  });
+  await prisma.department.upsert({
+    where: { name: "Sales" },
+    update: {},
+    create: { name: "Sales" },
+  });
+
   const passwordHash = await bcrypt.hash("ChangeMe123!", 10);
   const boss = await prisma.user.upsert({
     where: { email: "boss@venta.local" },
@@ -11,7 +46,7 @@ async function main() {
       name: "Ava Boss",
       phone: "+1-555-1000",
       password: passwordHash,
-      twoFAEnabled: true,
+      twoFAEnabled: false,
       twoFASecret: null,
       position: "Chief Executive Officer",
       department: "Executive",
@@ -23,7 +58,7 @@ async function main() {
       email: "boss@venta.local",
       phone: "+1-555-1000",
       password: passwordHash,
-      twoFAEnabled: true,
+      twoFAEnabled: false,
       twoFASecret: null,
       position: "Chief Executive Officer",
       department: "Executive",
@@ -31,6 +66,15 @@ async function main() {
       createdBy: null,
     },
     select: { id: true },
+  });
+
+  // Always keep seeded users with 2FA disabled by default.
+  // Users must opt in by setting up 2FA manually from Settings.
+  await prisma.user.updateMany({
+    data: {
+      twoFAEnabled: false,
+      twoFASecret: null,
+    },
   });
 
   await prisma.user.deleteMany({

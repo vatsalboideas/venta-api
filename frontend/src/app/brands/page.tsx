@@ -75,6 +75,7 @@ export default function BrandsPage() {
   const [useExistingContacts, setUseExistingContacts] = useState(true);
   const [showCreateBrandModal, setShowCreateBrandModal] = useState(false);
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
+  const [pendingDeleteBrand, setPendingDeleteBrand] = useState<{ id: string; name: string } | null>(null);
   const [initialEditState, setInitialEditState] = useState<{
     name: string;
     priority: Priority | "";
@@ -279,11 +280,11 @@ export default function BrandsPage() {
     }
   }
 
-  async function onDeleteBrand(id: string, name: string) {
-    if (!confirm(`Delete brand "${name}"? This will also delete related contacts and logs.`)) return;
+  async function onDeleteBrand(id: string) {
     try {
       await deleteBrand(id).unwrap();
       notifySuccess("Brand deleted.");
+      setPendingDeleteBrand(null);
     } catch (err) {
       notifyError(getErrorMessage(err, "Delete brand failed"));
     }
@@ -519,7 +520,7 @@ export default function BrandsPage() {
                           >
                             Edit
                           </button>
-                          <button onClick={() => onDeleteBrand(b.id, b.name)} className="text-red-500 hover:underline">
+                          <button onClick={() => setPendingDeleteBrand({ id: b.id, name: b.name })} className="text-red-500 hover:underline">
                             Delete
                           </button>
                         </div>
@@ -807,6 +808,41 @@ export default function BrandsPage() {
                   </Button>
                 </div>
               </form>
+            </div>
+          </div>
+        ) : null}
+        {pendingDeleteBrand ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div
+              className={
+                isDarkTheme
+                  ? "w-full max-w-md rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+                  : "w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"
+              }
+            >
+              <h3 className={isDarkTheme ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>
+                Delete Brand
+              </h3>
+              <p className={isDarkTheme ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>
+                Delete <strong>{pendingDeleteBrand.name}</strong>? Contacts linked only to this brand will be auto-deleted, along with related logs.
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={isDarkTheme ? "border-white/20 bg-slate-800 text-slate-100 hover:bg-slate-700" : undefined}
+                  onClick={() => setPendingDeleteBrand(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  className="bg-red-600 text-white hover:bg-red-500"
+                  onClick={() => onDeleteBrand(pendingDeleteBrand.id)}
+                >
+                  Delete
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}

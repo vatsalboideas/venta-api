@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 
 import { assertBrandWriteAccessOrThrow } from "../middleware/authz";
 import { prisma } from "../prisma";
+import { isConcurrentWriteConflict, lockRowOrThrow } from "../utils/concurrency";
 import {
   requireEmail,
   ValidationError,
@@ -230,6 +231,7 @@ export async function updateBrand(req: Request<BrandIdParams>, res: Response, ne
     }
 
     const updated = await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "brands", req.params.id, "Brand not found");
       if (existingContactIds.length > 0) {
         const matched = await tx.contact.findMany({
           where: { id: { in: existingContactIds } },
@@ -296,6 +298,9 @@ export async function updateBrand(req: Request<BrandIdParams>, res: Response, ne
 
     return res.json(updated);
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Brand is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Brand not found" });
     }
@@ -306,10 +311,41 @@ export async function updateBrand(req: Request<BrandIdParams>, res: Response, ne
 export async function deleteBrand(req: Request<BrandIdParams>, res: Response, next: NextFunction) {
   try {
     const user = req.user!;
-    await assertBrandWriteAccessOrThrow(user, req.params.id);
-    await prisma.brand.delete({ where: { id: req.params.id } });
+    const brand = await prisma.brand.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, ownerId: true },
+    });
+    if (!brand) return res.status(404).json({ message: "Brand not found" });
+
+    const isBoss = user.role === Role.BOSS;
+    const isBrandManager = user.role === Role.MANAGER && user.id === brand.ownerId;
+    if (!isBoss && !isBrandManager) {
+      return res.status(403).json({ message: "Only the brand manager or a boss can delete this brand" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "brands", req.params.id, "Brand not found");
+      const logs = await tx.log.findMany({
+        where: { brandId: req.params.id },
+        select: { id: true },
+      });
+      const logIds = logs.map((log) => log.id);
+
+      if (logIds.length > 0) {
+        await tx.logRevision.deleteMany({
+          where: { logId: { in: logIds } },
+        });
+      }
+
+      await tx.log.deleteMany({ where: { brandId: req.params.id } });
+      await tx.contact.deleteMany({ where: { brandId: req.params.id } });
+      await tx.brand.delete({ where: { id: req.params.id } });
+    });
     return res.status(204).send();
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Brand is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Brand not found" });
     }

@@ -19,6 +19,7 @@ import {
   useDisable2FAMutation,
   useMeQuery,
   useSetup2FAMutation,
+  useUpdateMeMutation,
   useVerifySetup2FAMutation,
 } from "@/store/services/api";
 import type { RootState } from "@/store";
@@ -54,10 +55,34 @@ export default function SettingsPage() {
 
   const me = useMeQuery(undefined, { skip: !token });
   const [setup2FA, setup2FAState] = useSetup2FAMutation();
+  const [updateMe, updateMeState] = useUpdateMeMutation();
   const [verifySetup2FA, verifySetup2FAState] = useVerifySetup2FAMutation();
   const [disable2FA, disable2FAState] = useDisable2FAMutation();
+  const profileForm = useForm<{
+    name: string;
+    email: string;
+    phone: string;
+    department: string;
+    position: string;
+  }>({
+    defaultValues: { name: "", email: "", phone: "", department: "", position: "" },
+  });
   const setupOtpForm = useForm<{ token: string }>({ defaultValues: { token: "" } });
   const disableOtpForm = useForm<{ token: string }>({ defaultValues: { token: "" } });
+
+  const role = me.data?.role;
+  const canEditAllProfileFields = role === "BOSS" || role === "MANAGER";
+
+  useEffect(() => {
+    if (!me.data) return;
+    profileForm.reset({
+      name: me.data.name ?? "",
+      email: me.data.email ?? "",
+      phone: me.data.phone ?? "",
+      department: me.data.department ?? "",
+      position: me.data.position ?? "",
+    });
+  }, [me.data, profileForm]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -117,6 +142,33 @@ export default function SettingsPage() {
       await me.refetch();
     } catch (err) {
       notifyError(getErrorMessage(err, "Disable 2FA failed"));
+    }
+  }
+
+  async function onSaveProfile(values: {
+    name: string;
+    email: string;
+    phone: string;
+    department: string;
+    position: string;
+  }) {
+    try {
+      const payload = canEditAllProfileFields
+        ? {
+            name: values.name.trim(),
+            email: values.email.trim(),
+            phone: values.phone.trim() || null,
+            department: values.department.trim() || null,
+            position: values.position.trim() || null,
+          }
+        : {
+            name: values.name.trim(),
+          };
+      await updateMe(payload).unwrap();
+      notifySuccess("Profile updated.");
+      await me.refetch();
+    } catch (err) {
+      notifyError(getErrorMessage(err, "Profile update failed"));
     }
   }
 
@@ -220,7 +272,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className={isDarkTheme ? "text-sm text-slate-300" : "text-sm text-slate-600"}>
-                Update user-related preferences here. Profile update API is not available yet, so this section currently shows your live account details.
+                Update your profile details.
               </p>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className={isDarkTheme ? "rounded-md border border-white/10 bg-slate-800/70 p-4" : "rounded-md border border-slate-200 bg-slate-50 p-4"}>
@@ -264,6 +316,63 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </div>
+              <form className="grid gap-3 md:grid-cols-2" onSubmit={profileForm.handleSubmit(onSaveProfile)} noValidate>
+                <div className="space-y-1 md:col-span-2">
+                  <Label htmlFor="profileName">Name *</Label>
+                  <Input
+                    id="profileName"
+                    {...profileForm.register("name", { required: "Name is required" })}
+                    className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="profileEmail">Email *</Label>
+                  <Input
+                    id="profileEmail"
+                    type="email"
+                    disabled={!canEditAllProfileFields}
+                    {...profileForm.register("email")}
+                    className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="profilePhone">Phone</Label>
+                  <Input
+                    id="profilePhone"
+                    disabled={!canEditAllProfileFields}
+                    {...profileForm.register("phone")}
+                    className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="profileDepartment">Department</Label>
+                  <Input
+                    id="profileDepartment"
+                    disabled={!canEditAllProfileFields}
+                    {...profileForm.register("department")}
+                    className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="profilePosition">Position</Label>
+                  <Input
+                    id="profilePosition"
+                    disabled={!canEditAllProfileFields}
+                    {...profileForm.register("position")}
+                    className={isDarkTheme ? "border-white/15 bg-slate-800 text-slate-100 placeholder:text-slate-400 focus-visible:ring-cyan-400/30" : undefined}
+                  />
+                </div>
+                {!canEditAllProfileFields ? (
+                  <p className={isDarkTheme ? "md:col-span-2 text-xs text-slate-400" : "md:col-span-2 text-xs text-slate-500"}>
+                    Employees and interns can update only their name.
+                  </p>
+                ) : null}
+                <div className="md:col-span-2 flex justify-end">
+                  <Button className={isDarkTheme ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : undefined} disabled={updateMeState.isLoading}>
+                    {updateMeState.isLoading ? "Saving..." : "Save Profile"}
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
 

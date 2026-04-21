@@ -43,6 +43,16 @@ export function requireNonNegativeNumber(field: string, value: unknown): number 
   return n;
 }
 
+/** Validates an optional non-negative number. */
+export function optionalNonNegativeNumber(field: string, value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  if (!isFinite(n) || n < 0) {
+    throw new ValidationError(`${field} must be a non-negative number`);
+  }
+  return n;
+}
+
 /** Validates an optional date string — returns a Date if present, null if absent, throws if malformed. */
 export function parseOptionalDate(field: string, value: unknown): Date | null {
   if (value === undefined || value === null) return null;

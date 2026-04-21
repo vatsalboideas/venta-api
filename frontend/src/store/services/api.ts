@@ -12,7 +12,12 @@ import type {
   CreateBrandRequest,
   CreateContactRequest,
   CreateLogRequest,
+  Department,
+  DepartmentRequest,
+  DeleteUserRequest,
   Disable2FARequest,
+  EmployeeType,
+  EmployeeTypeRequest,
   GlobalSearchResponse,
   LeaderboardItem,
   LoginResponse,
@@ -25,21 +30,39 @@ import type {
   UpdateBrandRequest,
   UpdateContactRequest,
   UpdateLogRequest,
+  UpdateUserRequest,
   User,
   Verify2FASetupRequest,
   VerifyTwoFARequest,
   VerifyTwoFAResponse,
 } from "@/types/api";
 
-const clientSecret = process.env.NEXT_PUBLIC_CLIENT_ENCRYPTION_SECRET ?? "frontend-dev-secret";
+const backendPublicKey = process.env.NEXT_PUBLIC_BACKEND_PUBLIC_KEY ?? "";
+const legacyClientSecret = process.env.NEXT_PUBLIC_CLIENT_ENCRYPTION_SECRET ?? "";
 const TOKEN_KEY = "venta-token";
 
 function shouldAutoLogout(url: string | undefined): boolean {
-  if (!url) return true;
-  return !(
-    url.includes("/auth/login") ||
-    url.includes("/auth/register") ||
-    url.includes("/auth/2fa/verify-login")
+  if (!url) return false;
+  // Treat only session-check endpoints as hard-auth failures.
+  return url.includes("/auth/me");
+}
+
+function getErrorMessageText(error: { data?: unknown }): string {
+  const data = error.data;
+  if (!data || typeof data !== "object") return "";
+  const maybeMessage = (data as { message?: unknown }).message;
+  return typeof maybeMessage === "string" ? maybeMessage.toLowerCase() : "";
+}
+
+function isAuthFailure(error: { status: unknown; data?: unknown }): boolean {
+  if (error.status !== 401) return false;
+  const message = getErrorMessageText(error);
+  if (!message) return true;
+  return (
+    message.includes("unauthorized") ||
+    message.includes("token") ||
+    message.includes("expired") ||
+    message.includes("invalid")
   );
 }
 
@@ -62,12 +85,12 @@ const rawBaseQuery = fetchBaseQuery({
   },
 });
 
-async function maybeDecryptErrorPayload(error: { data?: unknown }) {
+async function maybeDecryptErrorPayload(error: { data?: unknown }, transportKey: string | null) {
   const encrypted = error.data as { payload?: string } | undefined;
-  if (!encrypted?.payload) return;
+  if (!encrypted?.payload || !transportKey) return;
 
   try {
-    error.data = await decryptPayload(encrypted.payload, clientSecret);
+    error.data = await decryptPayload(encrypted.payload, transportKey);
   } catch (decryptError) {
     // Keep original payload if decrypt fails, but add trace detail for debugging.
     console.warn("[API Error] Failed to decrypt error payload", { decryptError });
@@ -76,24 +99,41 @@ async function maybeDecryptErrorPayload(error: { data?: unknown }) {
 
 export const api = createApi({
   reducerPath: "api",
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
+  refetchOnMountOrArgChange: true,
   baseQuery: async (args, apiStore, extraOptions) => {
     const request = typeof args === "string" ? { url: args } : { ...args };
     const currentToken = (apiStore.getState() as { auth: { token: string | null } }).auth.token;
+    const transportKeyMaterial = backendPublicKey || legacyClientSecret;
+    if (!transportKeyMaterial) {
+      return {
+        error: {
+          status: "CUSTOM_ERROR",
+          error: "Transport encryption key is not configured",
+        },
+      };
+    }
+    const encryptedRequest = await encryptPayload(request.body ?? {}, transportKeyMaterial);
+    request.headers = {
+      ...(typeof request.headers === "object" && request.headers !== null ? request.headers : {}),
+      ...(encryptedRequest.transportKey ? { "x-transport-key": encryptedRequest.transportKey } : {}),
+    };
     if (request.body !== undefined) {
-      request.body = await encryptPayload(request.body, clientSecret);
+      request.body = { payload: encryptedRequest.payload };
     }
     const result = await rawBaseQuery(request, apiStore, extraOptions);
     if (result.error) {
-      await maybeDecryptErrorPayload(result.error as { data?: unknown });
-      const status = result.error.status;
-      if ((status === 401 || status === 403) && currentToken && shouldAutoLogout(request.url)) {
+      await maybeDecryptErrorPayload(result.error as { data?: unknown }, encryptedRequest.rawTransportKey);
+      const error = result.error as { status: unknown; data?: unknown };
+      if (currentToken && shouldAutoLogout(request.url) && isAuthFailure(error)) {
         logoutAndRedirect(apiStore);
       }
       return result;
     }
     const encrypted = result.data as { payload?: string };
     if (encrypted?.payload) {
-      result.data = await decryptPayload(encrypted.payload, clientSecret);
+      result.data = await decryptPayload(encrypted.payload, encryptedRequest.rawTransportKey);
     }
     return result;
   },
@@ -112,6 +152,10 @@ export const api = createApi({
     me: builder.query<User, void>({
       query: () => "/auth/me",
       providesTags: ["Me"],
+    }),
+    updateMe: builder.mutation<User, UpdateUserRequest>({
+      query: (body) => ({ url: "/auth/me", method: "PATCH", body }),
+      invalidatesTags: ["Me"],
     }),
     setup2FA: builder.mutation<Setup2FAResponse, void>({
       query: () => ({ url: "/auth/2fa/setup", method: "POST", body: {} }),
@@ -140,6 +184,51 @@ export const api = createApi({
       query: (body) => ({ url: "/auth/interns", method: "POST", body }),
       invalidatesTags: ["Employees"],
     }),
+    updateUser: builder.mutation<User, { id: string; body: UpdateUserRequest }>({
+      query: ({ id, body }) => ({ url: `/auth/users/${id}`, method: "PATCH", body }),
+      invalidatesTags: (_result, _err, { id }) => [{ type: "Employees", id }, "Employees"],
+    }),
+    deleteUser: builder.mutation<{ message: string; transferredTo: string }, DeleteUserRequest>({
+      query: ({ id, transferToUserId }) => {
+        const query = new URLSearchParams();
+        if (transferToUserId) query.set("transferToUserId", transferToUserId);
+        const qs = query.toString();
+        return { url: qs ? `/auth/users/${id}?${qs}` : `/auth/users/${id}`, method: "DELETE" };
+      },
+      invalidatesTags: ["Employees"],
+    }),
+    listDepartments: builder.query<Department[], void>({
+      query: () => "/departments",
+      providesTags: ["Employees"],
+    }),
+    createDepartment: builder.mutation<Department, DepartmentRequest>({
+      query: (body) => ({ url: "/departments", method: "POST", body }),
+      invalidatesTags: ["Employees"],
+    }),
+    updateDepartment: builder.mutation<Department, { id: string; body: DepartmentRequest }>({
+      query: ({ id, body }) => ({ url: `/departments/${id}`, method: "PATCH", body }),
+      invalidatesTags: ["Employees"],
+    }),
+    deleteDepartment: builder.mutation<void, string>({
+      query: (id) => ({ url: `/departments/${id}`, method: "DELETE" }),
+      invalidatesTags: ["Employees"],
+    }),
+    listEmployeeTypes: builder.query<EmployeeType[], void>({
+      query: () => "/employee-types",
+      providesTags: ["Employees"],
+    }),
+    createEmployeeType: builder.mutation<EmployeeType, EmployeeTypeRequest>({
+      query: (body) => ({ url: "/employee-types", method: "POST", body }),
+      invalidatesTags: ["Employees"],
+    }),
+    updateEmployeeType: builder.mutation<EmployeeType, { id: string; body: Pick<EmployeeTypeRequest, "label"> }>({
+      query: ({ id, body }) => ({ url: `/employee-types/${id}`, method: "PATCH", body }),
+      invalidatesTags: ["Employees"],
+    }),
+    deleteEmployeeType: builder.mutation<void, string>({
+      query: (id) => ({ url: `/employee-types/${id}`, method: "DELETE" }),
+      invalidatesTags: ["Employees"],
+    }),
 
     // ── Brands ──────────────────────────────────────────────────────────────
     listBrands: builder.query<Brand[], { q?: string } | void>({
@@ -156,15 +245,15 @@ export const api = createApi({
     }),
     createBrand: builder.mutation<Brand, CreateBrandRequest>({
       query: (body) => ({ url: "/brands", method: "POST", body }),
-      invalidatesTags: ["Brands"],
+      invalidatesTags: ["Brands", "Contacts", "Logs"],
     }),
     updateBrand: builder.mutation<Brand, { id: string } & UpdateBrandRequest>({
       query: ({ id, ...body }) => ({ url: `/brands/${id}`, method: "PATCH", body }),
-      invalidatesTags: (_result, _err, { id }) => [{ type: "Brands", id }, "Brands"],
+      invalidatesTags: (_result, _err, { id }) => [{ type: "Brands", id }, "Brands", "Contacts", "Logs"],
     }),
     deleteBrand: builder.mutation<void, string>({
       query: (id) => ({ url: `/brands/${id}`, method: "DELETE" }),
-      invalidatesTags: ["Brands"],
+      invalidatesTags: ["Brands", "Contacts", "Logs"],
     }),
 
     // ── Contacts ────────────────────────────────────────────────────────────
@@ -193,15 +282,15 @@ export const api = createApi({
     }),
     createContact: builder.mutation<Contact, CreateContactRequest>({
       query: (body) => ({ url: "/contacts", method: "POST", body }),
-      invalidatesTags: ["Contacts"],
+      invalidatesTags: ["Contacts", "Brands", "Logs"],
     }),
     updateContact: builder.mutation<Contact, { id: string } & UpdateContactRequest>({
       query: ({ id, ...body }) => ({ url: `/contacts/${id}`, method: "PATCH", body }),
-      invalidatesTags: (_result, _err, { id }) => [{ type: "Contacts", id }, "Contacts"],
+      invalidatesTags: (_result, _err, { id }) => [{ type: "Contacts", id }, "Contacts", "Brands", "Logs"],
     }),
     deleteContact: builder.mutation<void, string>({
       query: (id) => ({ url: `/contacts/${id}`, method: "DELETE" }),
-      invalidatesTags: ["Contacts"],
+      invalidatesTags: ["Contacts", "Brands", "Logs"],
     }),
 
     // ── Logs ────────────────────────────────────────────────────────────────
@@ -282,11 +371,22 @@ export const {
   useLoginMutation,
   useVerifyTwoFAMutation,
   useMeQuery,
+  useUpdateMeMutation,
   useSetup2FAMutation,
   useVerifySetup2FAMutation,
   useDisable2FAMutation,
   useListUsersQuery,
   useCreateInternMutation,
+  useUpdateUserMutation,
+  useDeleteUserMutation,
+  useListDepartmentsQuery,
+  useCreateDepartmentMutation,
+  useUpdateDepartmentMutation,
+  useDeleteDepartmentMutation,
+  useListEmployeeTypesQuery,
+  useCreateEmployeeTypeMutation,
+  useUpdateEmployeeTypeMutation,
+  useDeleteEmployeeTypeMutation,
   useListBrandsQuery,
   useGetBrandQuery,
   useCreateBrandMutation,

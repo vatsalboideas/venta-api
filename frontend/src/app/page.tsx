@@ -18,8 +18,6 @@ import { persistToken } from "@/store/provider";
 import { notifyError, notifySuccess } from "@/lib/toast";
 import {
   useConversionRateQuery,
-  useDeleteBrandMutation,
-  useDeleteLogMutation,
   useLeaderboardQuery,
   useListBrandsQuery,
   useListLogsQuery,
@@ -250,29 +248,6 @@ function Dashboard() {
   const conversion = useConversionRateQuery();
   const leaderboard = useLeaderboardQuery();
 
-  // ── Mutations
-  const [deleteBrand] = useDeleteBrandMutation();
-  const [deleteLog] = useDeleteLogMutation();
-  async function onDeleteBrand(id: string, name: string) {
-    if (!confirm(`Delete brand "${name}"? This will also delete related contacts and logs.`)) return;
-    try {
-      await deleteBrand(id).unwrap();
-      notifySuccess("Brand deleted.");
-    } catch (err) {
-      notifyError(getErrorMessage(err, "Delete brand failed"));
-    }
-  }
-
-  async function onDeleteLog(id: string, title: string) {
-    if (!confirm(`Delete log "${title}"?`)) return;
-    try {
-      await deleteLog(id).unwrap();
-      notifySuccess("Log deleted.");
-    } catch (err) {
-      notifyError(getErrorMessage(err, "Delete log failed"));
-    }
-  }
-
   const totalRevenue = leaderboard.data?.reduce((s, r) => s + r.totalRevenue, 0) ?? 0;
   const isDarkTheme = themeMode === "dark" || (themeMode === "system" && systemPrefersDark);
   const skeletonThemeStyle: CSSProperties | undefined = isDarkTheme
@@ -414,13 +389,12 @@ function Dashboard() {
                     <TH>Industry</TH>
                     <TH>Expected Rev.</TH>
                     <TH>Owner</TH>
-                    <TH></TH>
                   </TR>
                 </THead>
                 <TBody>
-                  {brands.isLoading && <TableLoading cols={6} />}
-                  {brands.isError && <TableError cols={6} onRetry={() => brands.refetch()} />}
-                  {brands.data?.length === 0 && <TableEmpty cols={6} message="No brands yet. Create one to get started." />}
+                  {brands.isLoading && <TableLoading cols={5} />}
+                  {brands.isError && <TableError cols={5} onRetry={() => brands.refetch()} />}
+                  {brands.data?.length === 0 && <TableEmpty cols={5} message="No brands yet. Create one to get started." />}
                   {brands.data?.map((b) => (
                     <TR key={b.id}>
                       <TD className="font-medium">{b.name}</TD>
@@ -434,14 +408,6 @@ function Dashboard() {
                       <TD className="text-slate-500">{b.industry ?? "–"}</TD>
                       <TD>{formatInrCurrency(b.expectedRevenue)}</TD>
                       <TD className="text-slate-500">{b.owner?.name ?? b.ownerId}</TD>
-                      <TD>
-                        <button
-                          onClick={() => onDeleteBrand(b.id, b.name)}
-                          className="text-xs text-red-500 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </TD>
                     </TR>
                   ))}
                 </TBody>
@@ -470,13 +436,12 @@ function Dashboard() {
                     <TH>Priority</TH>
                     <TH>Brand</TH>
                     <TH>Assignee</TH>
-                    <TH></TH>
                   </TR>
                 </THead>
                 <TBody>
-                  {logs.isLoading && <TableLoading cols={6} />}
-                  {logs.isError && <TableError cols={6} onRetry={() => logs.refetch()} />}
-                  {logs.data?.length === 0 && <TableEmpty cols={6} message="No logs yet." />}
+                  {logs.isLoading && <TableLoading cols={5} />}
+                  {logs.isError && <TableError cols={5} onRetry={() => logs.refetch()} />}
+                  {logs.data?.length === 0 && <TableEmpty cols={5} message="No logs yet." />}
                   {logs.data?.map((l) => (
                     <TR key={l.id}>
                       <TD className="font-medium">{l.title}</TD>
@@ -496,11 +461,6 @@ function Dashboard() {
                       </TD>
                       <TD className="text-slate-500">{l.brand?.name ?? l.brandId}</TD>
                       <TD className="text-slate-500">{l.assignee?.name ?? l.assignedTo}</TD>
-                      <TD>
-                        <button onClick={() => onDeleteLog(l.id, l.title)} className="text-xs text-red-500 hover:underline">
-                          Delete
-                        </button>
-                      </TD>
                     </TR>
                   ))}
                 </TBody>

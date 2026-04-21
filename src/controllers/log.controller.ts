@@ -4,10 +4,11 @@ import { Request, Response, NextFunction } from "express";
 
 import { assertLogWriteAccessOrThrow } from "../middleware/authz";
 import { prisma, syncBrandForecastOnClosedWon } from "../prisma";
+import { isConcurrentWriteConflict, lockRowOrThrow } from "../utils/concurrency";
 import {
   requireDate,
   requireEnum,
-  requireNonNegativeNumber,
+  optionalNonNegativeNumber,
   requireString,
 } from "../utils/validate";
 
@@ -23,7 +24,13 @@ function withExpectedRevenue<T extends { brand: { expectedRevenue: unknown } }>(
 }
 
 function withRevisionRevenue<T extends { actualRevenue: unknown }>(revision: T) {
-  return { ...revision, actualRevenue: Number(revision.actualRevenue) };
+  return {
+    ...revision,
+    actualRevenue:
+      revision.actualRevenue === null || revision.actualRevenue === undefined
+        ? null
+        : Number(revision.actualRevenue),
+  };
 }
 
 async function createLogRevision(args: {
@@ -40,7 +47,7 @@ async function createLogRevision(args: {
     lastContactDate: Date;
     followUpDate: Date;
     meetingDate: Date;
-    actualRevenue: number;
+    actualRevenue: number | null;
     notes: string;
   };
 }) {
@@ -163,7 +170,7 @@ export async function createLog(req: Request, res: Response, next: NextFunction)
     const lastContactDate = requireDate("lastContactDate", req.body.lastContactDate);
     const followUpDate = requireDate("followUpDate", req.body.followUpDate);
     const meetingDate = requireDate("meetingDate", req.body.meetingDate);
-    const actualRevenue = requireNonNegativeNumber("actualRevenue", req.body.actualRevenue);
+    const actualRevenue = optionalNonNegativeNumber("actualRevenue", req.body.actualRevenue);
 
     // Verify brand exists
     const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true, ownerId: true } });
@@ -176,9 +183,16 @@ export async function createLog(req: Request, res: Response, next: NextFunction)
     });
     if (!contact) return res.status(404).json({ message: "Contact not found for selected brand" });
 
-    // Assignee must match selected brand owner.
-    if (assignedTo !== brand.ownerId) {
+    const isBoss = req.user!.role === "BOSS";
+    if (!isBoss && assignedTo !== brand.ownerId) {
       return res.status(400).json({ message: "assignedTo must be the selected brand owner" });
+    }
+    if (isBoss) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: assignedTo },
+        select: { id: true },
+      });
+      if (!assignee) return res.status(404).json({ message: "Assigned user not found" });
     }
 
     const created = await prisma.log.create({
@@ -216,7 +230,10 @@ export async function createLog(req: Request, res: Response, next: NextFunction)
         lastContactDate: created.lastContactDate,
         followUpDate: created.followUpDate,
         meetingDate: created.meetingDate,
-        actualRevenue: Number(created.actualRevenue),
+        actualRevenue:
+          created.actualRevenue === null || created.actualRevenue === undefined
+            ? null
+            : Number(created.actualRevenue),
         notes: created.notes,
       },
     });
@@ -261,7 +278,7 @@ export async function updateLog(req: Request<LogIdParams>, res: Response, next: 
     const lastContactDate = requireDate("lastContactDate", req.body.lastContactDate);
     const followUpDate = requireDate("followUpDate", req.body.followUpDate);
     const meetingDate = requireDate("meetingDate", req.body.meetingDate);
-    const actualRevenue = requireNonNegativeNumber("actualRevenue", req.body.actualRevenue);
+    const actualRevenue = optionalNonNegativeNumber("actualRevenue", req.body.actualRevenue);
 
     const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true, ownerId: true } });
     if (!brand) return res.status(404).json({ message: "Brand not found" });
@@ -272,30 +289,41 @@ export async function updateLog(req: Request<LogIdParams>, res: Response, next: 
     });
     if (!contact) return res.status(404).json({ message: "Contact not found for selected brand" });
 
-    if (assignedTo !== brand.ownerId) {
+    const isBoss = req.user!.role === "BOSS";
+    if (!isBoss && assignedTo !== brand.ownerId) {
       return res.status(400).json({ message: "assignedTo must be the selected brand owner" });
     }
+    if (isBoss) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: assignedTo },
+        select: { id: true },
+      });
+      if (!assignee) return res.status(404).json({ message: "Assigned user not found" });
+    }
 
-    const updated = await prisma.log.update({
-      where: { id: req.params.id },
-      data: {
-        title,
-        brandId,
-        contactId,
-        status,
-        priority,
-        assignedTo,
-        lastContactDate,
-        followUpDate,
-        meetingDate,
-        actualRevenue,
-        notes,
-      },
-      include: {
-        brand: { select: { id: true, name: true, expectedRevenue: true } },
-        contact: { select: { id: true, name: true } },
-        assignee: { select: { id: true, name: true, email: true, role: true } },
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "logs", req.params.id, "Log not found");
+      return tx.log.update({
+        where: { id: req.params.id },
+        data: {
+          title,
+          brandId,
+          contactId,
+          status,
+          priority,
+          assignedTo,
+          lastContactDate,
+          followUpDate,
+          meetingDate,
+          actualRevenue,
+          notes,
+        },
+        include: {
+          brand: { select: { id: true, name: true, expectedRevenue: true } },
+          contact: { select: { id: true, name: true } },
+          assignee: { select: { id: true, name: true, email: true, role: true } },
+        },
+      });
     });
 
     await createLogRevision({
@@ -312,7 +340,10 @@ export async function updateLog(req: Request<LogIdParams>, res: Response, next: 
         lastContactDate: updated.lastContactDate,
         followUpDate: updated.followUpDate,
         meetingDate: updated.meetingDate,
-        actualRevenue: Number(updated.actualRevenue),
+        actualRevenue:
+          updated.actualRevenue === null || updated.actualRevenue === undefined
+            ? null
+            : Number(updated.actualRevenue),
         notes: updated.notes,
       },
     });
@@ -320,6 +351,9 @@ export async function updateLog(req: Request<LogIdParams>, res: Response, next: 
     await syncBrandForecastOnClosedWon({ status: updated.status, brandId: updated.brandId });
     return res.json(withExpectedRevenue(updated));
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Log is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Log not found" });
     }
@@ -356,9 +390,18 @@ export async function deleteLog(req: Request<LogIdParams>, res: Response, next: 
   try {
     const user = req.user!;
     await assertLogWriteAccessOrThrow(user, req.params.id);
-    await prisma.log.delete({ where: { id: req.params.id } });
+    await prisma.$transaction(async (tx) => {
+      await lockRowOrThrow(tx, "logs", req.params.id, "Log not found");
+      await tx.logRevision.deleteMany({
+        where: { logId: req.params.id },
+      });
+      await tx.log.delete({ where: { id: req.params.id } });
+    });
     return res.status(204).send();
   } catch (err) {
+    if (isConcurrentWriteConflict(err)) {
+      return res.status(409).json({ message: "Log is being modified by another user. Please retry." });
+    }
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
       return res.status(404).json({ message: "Log not found" });
     }
